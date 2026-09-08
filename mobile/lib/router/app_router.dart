@@ -11,6 +11,10 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
+// main.dart imports this file for buildAppRouter(), and this file imports
+// main.dart back for the real screen widgets (LoginScreen, RegisterScreen,
+// RootShell, RichfieldRole) — a legal, ordinary circular import in Dart.
+import '../main.dart';
 
 /// Bridges a Stream to GoRouter's Listenable-based refresh mechanism.
 /// This is the standard pattern from the go_router docs — GoRouter needs a
@@ -87,16 +91,55 @@ GoRouter buildAppRouter(AuthService authService) {
       return null; // no redirect needed
     },
     routes: [
-      GoRoute(path: '/login', builder: (context, state) => const LoginScreenPlaceholder()),
-      GoRoute(path: '/signup', builder: (context, state) => const SignupScreenPlaceholder()),
+      GoRoute(path: '/login', builder: (context, state) => LoginScreen(authService: authService)),
+      GoRoute(path: '/signup', builder: (context, state) => RegisterScreen(authService: authService)),
       GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
       GoRoute(path: '/pending-approval', builder: (context, state) => const PendingApprovalScreenPlaceholder()),
       GoRoute(path: '/account-rejected', builder: (context, state) => const AccountRejectedScreenPlaceholder()),
-      GoRoute(path: '/home', builder: (context, state) => const HomeScreenPlaceholder()),
+      GoRoute(path: '/home', builder: (context, state) => _HomeGate(authService: authService)),
       GoRoute(path: '/admin', builder: (context, state) => const AdminHomeScreenPlaceholder()),
       GoRoute(path: '/', redirect: (context, state) => '/home'),
     ],
   );
+}
+
+// role/account_status live in Postgres, not the JWT, and GoRoute.builder is
+// synchronous — this fetches the profile once to decide which RichfieldRole
+// tab-shell to land on (Feed vs BusinessHub vs AdminHub).
+class _HomeGate extends StatelessWidget {
+  const _HomeGate({required this.authService});
+
+  final AuthService authService;
+
+  RichfieldRole _roleFromProfile(String? role) {
+    switch (role) {
+      case 'alumni':
+        return RichfieldRole.alumni;
+      case 'business':
+        return RichfieldRole.corporate;
+      case 'administrator':
+        return RichfieldRole.admin;
+      default:
+        return RichfieldRole.student;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: authService.fetchOwnProfile(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        if (snapshot.hasError || !snapshot.hasData) {
+          return const Scaffold(body: Center(child: Text('Could not load your profile.')));
+        }
+        final role = _roleFromProfile(snapshot.data!['role'] as String?);
+        return RootShell(role: role, authService: authService);
+      },
+    );
+  }
 }
 
 // --- Placeholders: swap these for Kesh's actual screen widgets. ---
@@ -105,14 +148,6 @@ class _PlaceholderScreen extends StatelessWidget {
   final String label;
   @override
   Widget build(BuildContext context) => Scaffold(body: Center(child: Text(label)));
-}
-
-class LoginScreenPlaceholder extends _PlaceholderScreen {
-  const LoginScreenPlaceholder() : super('Login');
-}
-
-class SignupScreenPlaceholder extends _PlaceholderScreen {
-  const SignupScreenPlaceholder() : super('Sign up');
 }
 
 class MfaSetupScreenPlaceholder extends _PlaceholderScreen {
@@ -125,10 +160,6 @@ class PendingApprovalScreenPlaceholder extends _PlaceholderScreen {
 
 class AccountRejectedScreenPlaceholder extends _PlaceholderScreen {
   const AccountRejectedScreenPlaceholder() : super('Account rejected');
-}
-
-class HomeScreenPlaceholder extends _PlaceholderScreen {
-  const HomeScreenPlaceholder() : super('Home');
 }
 
 class AdminHomeScreenPlaceholder extends _PlaceholderScreen {
