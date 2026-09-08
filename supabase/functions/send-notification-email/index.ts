@@ -1,4 +1,4 @@
-// supabase/functions/send-notification-email/index.ts
+﻿// supabase/functions/send-notification-email/index.ts
 //
 // Triggered by Supabase Database Webhooks (Dashboard > Database > Webhooks),
 // NOT called directly by any client. Two webhooks feed this one function:
@@ -89,7 +89,19 @@ Deno.serve(async (req) => {
     if (table === "verification_audit" && type === "INSERT") {
       const { claim_id, business_id, decision, reason } = record;
 
-      if (claim_id) {
+      // Observed in production logs (2026-09-08): a real webhook delivery
+      // came through with claim_id as the literal 3-char string "null"
+      // rather than JSON/SQL null, which is truthy in JS and blew up
+      // Postgres with "invalid input syntax for type uuid: null" instead
+      // of falling through to the business_id branch. Root cause looks
+      // like it's upstream of this function (how the trigger/pg_net
+      // payload gets built) - flagged to Reilyn to dig into separately -
+      // but guarding here means a payload shaped like that degrades to a
+      // clear "neither target present" error instead of a stack trace.
+      const hasClaimId = claim_id != null && claim_id !== "null" && claim_id !== "";
+      const hasBusinessId = business_id != null && business_id !== "null" && business_id !== "";
+
+      if (hasClaimId) {
         const { data: claim, error: claimError } = await supabase
           .from("verification_claims")
           .select("user_id")
@@ -112,7 +124,7 @@ Deno.serve(async (req) => {
         return new Response("alumni decision email sent", { status: 200 });
       }
 
-      if (business_id) {
+      if (hasBusinessId) {
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("email, first_name")
