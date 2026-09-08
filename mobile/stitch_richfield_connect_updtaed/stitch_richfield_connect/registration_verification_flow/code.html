@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "on-tertiary-container": "#4e3d00", "on-secondary-fixed-variant": "#2d4674", "surface": "#faf8ff", "on-tertiary-fixed": "#241a00", "surface-variant": "#dae2fd", "on-primary": "#ffffff", "on-tertiary": "#ffffff", "outline-variant": "#e4bdbc", "on-primary-container": "#ffd6d4", "surface-container-high": "#e2e7ff", "surface-container-low": "#f2f3ff", "on-background": "#131b2e", "on-primary-fixed-variant": "#92001e", "on-surface-variant": "#5c403f", "surface-container-highest": "#dae2fd", "inverse-primary": "#ffb3b1", "on-tertiary-fixed-variant": "#574500", "on-primary-fixed": "#410008", "surface-dim": "#d2d9f4", "secondary-container": "#b1c9ff", "surface-bright": "#faf8ff", "on-secondary-container": "#3b5483", "on-secondary": "#ffffff", "inverse-on-surface": "#eef0ff", "primary-fixed-dim": "#ffb3b1", "tertiary-fixed": "#ffe088", "inverse-surface": "#283044", "surface-container-lowest": "#ffffff", "on-surface": "#131b2e", "background": "#faf8ff", "primary-container": "#c4122f", "on-error-container": "#93000a", "tertiary-fixed-dim": "#e9c349", "primary-fixed": "#ffdad8", "tertiary": "#735c00", "tertiary-container": "#cba72f", "surface-container": "#eaedff", "secondary": "#465e8e", "on-error": "#ffffff", "secondary-fixed-dim": "#aec7fd", "outline": "#906f6e", "surface-tint": "#bd092b", "primary": "#9a0020", "on-secondary-fixed": "#001a41", "secondary-fixed": "#d8e2ff", "error": "#ba1a1a", "error-container": "#ffdad6" }, borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" }, spacing: { "space-sm": "0.5rem", "space-3xl": "3rem", "margin-mobile": "1rem", "space-2xs": "0.125rem", "gutter-tablet": "1rem", "space-base": "1rem", "gutter-mobile": "0.75rem", "space-xs": "0.25rem", "margin-tablet": "1.5rem", "space-lg": "1.25rem", "space-2xl": "2rem", "space-md": "0.75rem", "space-xl": "1.5rem" }, fontFamily: { "headline-sm": ["Inter"], "label-badge": ["Inter"], "display-lg-mobile": ["Inter"], "label-lg": ["Inter"], "display-lg": ["Inter"], "body-lg": ["Inter"], "headline-md": ["Inter"], "headline-lg": ["Inter"], "body-md": ["Inter"], "label-md": ["Inter"], "body-sm": ["Inter"] }, fontSize: { "headline-sm": ["18px", { lineHeight: "24px", letterSpacing: "-0.005em", fontWeight: "600" }], "label-badge": ["10px", { lineHeight: "12px", letterSpacing: "0.05em", fontWeight: "700" }], "display-lg-mobile": ["28px", { lineHeight: "34px", letterSpacing: "-0.02em", fontWeight: "800" }], "label-lg": ["14px", { lineHeight: "18px", letterSpacing: "0.01em", fontWeight: "600" }], "display-lg": ["36px", { lineHeight: "44px", letterSpacing: "-0.025em", fontWeight: "800" }], "body-lg": ["16px", { lineHeight: "24px", letterSpacing: "0em", fontWeight: "400" }], "headline-md": ["20px", { lineHeight: "28px", letterSpacing: "-0.01em", fontWeight: "600" }], "headline-lg": ["24px", { lineHeight: "32px", letterSpacing: "-0.015em", fontWeight: "700" }], "body-md": ["14px", { lineHeight: "20px", letterSpacing: "0em", fontWeight: "400" }], "label-md": ["12px", { lineHeight: "16px", letterSpacing: "0.02em", fontWeight: "600" }], "body-sm": ["12px", { lineHeight: "16px", letterSpacing: "0.01em", fontWeight: "400" }] } } } }</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;}body{overscroll-behavior:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface font-body-md text-body-md text-on-surface pt-safe pb-safe min-h-screen flex flex-col"><main class="flex flex-col relative w-full bg-surface min-h-screen"><div class="flex flex-col w-full pb-8">
+<div class="relative overflow-hidden bg-surface-container-low px-4 pt-5 pb-6">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-on-primary shadow-sm">
+<span class="material-symbols-outlined text-[18px]">verified_user</span>
+</div>
+<div>
+<span class="text-label-badge font-label-badge text-primary uppercase tracking-wider block">Richfield Graduate Network</span>
+<span class="text-headline-sm font-headline-sm text-on-surface">Join the Talent Nexus</span>
+</div>
+</div>
+<div class="px-2 py-1 bg-surface-container rounded-full text-label-badge font-label-badge text-secondary flex items-center gap-1 shadow-sm">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+<span>ACCREDITED</span>
+</div>
+</div>
+<p class="text-body-sm font-body-sm text-on-surface-variant leading-snug">
+      Verify your institutional credentials to connect directly with premier South African corporate recruiters and alumni circles.
+    </p>
+<!-- Role Switcher Segmented Control -->
+<div class="mt-4 p-1 bg-surface-container rounded-xl flex items-stretch gap-1 shadow-sm">
+<button class="flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 bg-surface shadow-sm text-primary font-bold" id="role-btn-student" onclick="switchRole('student')" type="button">
+<span class="material-symbols-outlined text-[18px]">school</span>
+<span>Student</span>
+</button>
+<button class="flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 text-on-surface-variant hover:text-on-surface" id="role-btn-alumni" onclick="switchRole('alumni')" type="button">
+<span class="material-symbols-outlined text-[18px]">workspace_premium</span>
+<span>Alumni</span>
+</button>
+<button class="flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 text-on-surface-variant hover:text-on-surface" id="role-btn-employer" onclick="switchRole('employer')" type="button">
+<span class="material-symbols-outlined text-[18px]">corporate_fare</span>
+<span>Employer</span>
+</button>
+</div>
+</div>
+<form class="px-4 pt-4 flex flex-col gap-4" id="signup-form" onsubmit="event.preventDefault(); triggerAuthSuccess();">
+<!-- Role Indicator Badge -->
+<div class="rounded-xl p-3 bg-secondary-container/40 flex items-center justify-between" id="role-banner">
+<div class="flex items-center gap-2.5">
+<div class="w-8 h-8 rounded-lg bg-secondary text-on-secondary flex items-center justify-center shadow-sm" id="role-icon-box">
+<span class="material-symbols-outlined text-[18px]" id="role-icon">school</span>
+</div>
+<div>
+<h2 class="text-label-lg font-label-lg text-on-surface" id="role-heading">Enrolled Student Registration</h2>
+<p class="text-body-sm font-body-sm text-on-surface-variant" id="role-subheading">Instant institutional database match via student email</p>
+</div>
+</div>
+<span class="text-label-badge font-label-badge px-2 py-0.5 rounded-full bg-surface text-secondary shadow-sm" id="role-badge-pill">ID VERIFIED</span>
+</div>
+<!-- STUDENT FIELDS -->
+<div class="flex flex-col gap-3" id="section-student">
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Full Legal Name</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">person</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="e.g. Sipho Nhlanhla Dlamini" required="" type="text"/>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Student Number</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">badge</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" pattern="[0-9]{8,10}" placeholder="202209148" required="" type="text"/>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Mandatory Institutional Email</label>
+<div class="flex items-center bg-surface-container-low px-3 py-1.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">alternate_email</span>
+<input class="bg-transparent flex-1 text-body-md font-body-md text-on-surface placeholder:text-outline outline-none py-1" placeholder="s.dlamini22" required="" type="text"/>
+<div class="relative ml-1">
+<select class="bg-surface-container-high text-on-secondary-container text-label-md font-label-md py-1.5 px-2 rounded-md outline-none cursor-pointer">
+<option value="@my.richfield.ac.za">@my.richfield.ac.za</option>
+<option value="@my.aaa.ac.za">@my.aaa.ac.za</option>
+</select>
+</div>
+</div>
+<span class="text-body-sm font-body-sm text-on-surface-variant flex items-center gap-1 pt-0.5">
+<span class="material-symbols-outlined text-[14px] text-tertiary">lock</span> Domain suffix locked to accredited campus portals
+        </span>
+</div>
+<div class="grid grid-cols-2 gap-2">
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Campus</label>
+<div class="relative bg-surface-container-low rounded-lg shadow-sm">
+<select class="w-full bg-transparent text-body-md font-body-md text-on-surface px-3 py-2.5 outline-none appearance-none cursor-pointer">
+<option value="braamfontein">Braamfontein</option>
+<option value="umhlanga">Umhlanga</option>
+<option value="capetown">Cape Town</option>
+<option value="pretoria">Pretoria</option>
+<option value="centurion">Centurion</option>
+<option value="polokwane">Polokwane</option>
+</select>
+<span class="material-symbols-outlined text-[18px] text-secondary absolute right-2.5 top-3 pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Expected Year</label>
+<div class="relative bg-surface-container-low rounded-lg shadow-sm">
+<select class="w-full bg-transparent text-body-md font-body-md text-on-surface px-3 py-2.5 outline-none appearance-none cursor-pointer">
+<option selected="" value="2025">2025</option>
+<option value="2026">2026</option>
+<option value="2027">2027</option>
+<option value="2028">2028</option>
+</select>
+<span class="material-symbols-outlined text-[18px] text-secondary absolute right-2.5 top-3 pointer-events-none">calendar_today</span>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Faculty / Programme</label>
+<div class="relative bg-surface-container-low rounded-lg shadow-sm">
+<select class="w-full bg-transparent text-body-md font-body-md text-on-surface px-3 py-2.5 outline-none appearance-none cursor-pointer">
+<option value="bsc_it">BSc Information Technology</option>
+<option value="dip_it">Diploma in Information Technology</option>
+<option value="bcom_ba">BCom Business Administration</option>
+<option value="bit">Bachelor of Business Administration (BBA)</option>
+<option value="hc_it">Higher Certificate in IT</option>
+</select>
+<span class="material-symbols-outlined text-[18px] text-secondary absolute right-2.5 top-3 pointer-events-none">school</span>
+</div>
+</div>
+</div>
+<!-- ALUMNI FIELDS (Hidden by default) -->
+<div class="hidden flex-col gap-3" id="section-alumni">
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Personal or Professional Email</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">email</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="k.pillay@workemail.co.za" type="email"/>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Student Number or SA National ID</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">fingerprint</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="Archived Student ID or 13-digit RSA ID" type="text"/>
+</div>
+<span class="text-body-sm font-body-sm text-on-surface-variant pt-0.5">Used for automated Richfield registrar database reconciliation</span>
+</div>
+<!-- Verification Banner / Alternative Method -->
+<div class="p-3.5 bg-surface-container rounded-xl shadow-sm flex flex-col gap-2.5">
+<div class="flex items-center justify-between">
+<span class="text-label-md font-label-md text-on-surface flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[18px] text-tertiary">military_tech</span> Fast-Track Academic Verification
+          </span>
+<span class="text-label-badge font-label-badge bg-tertiary-fixed text-on-tertiary-fixed px-2 py-0.5 rounded-full">RECOMMENDED</span>
+</div>
+<p class="text-body-sm font-body-sm text-on-surface-variant">
+          Upload graduation certificate, statement of results, or SA ID copy for instant alumni badge accreditation.
+        </p>
+<label class="flex items-center justify-center gap-2 p-3 bg-surface-container-lowest rounded-lg cursor-pointer hover:bg-surface transition-colors shadow-sm">
+<span class="material-symbols-outlined text-primary text-[20px]">upload_file</span>
+<span class="text-label-md font-label-md text-on-surface" id="upload-label">Select Certificate / Transcript (PDF or PNG)</span>
+<input accept=".pdf,.png,.jpg,.jpeg" class="hidden" onchange="handleAlumniUpload(this)" type="file"/>
+</label>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Graduation Year</label>
+<div class="relative bg-surface-container-low rounded-lg shadow-sm">
+<select class="w-full bg-transparent text-body-md font-body-md text-on-surface px-3 py-2.5 outline-none appearance-none cursor-pointer">
+<option value="2024">Class of 2024</option>
+<option value="2023">Class of 2023</option>
+<option value="2022">Class of 2022</option>
+<option value="2021">Class of 2021</option>
+<option value="2020">Class of 2020</option>
+<option value="earlier">2019 or Earlier</option>
+</select>
+<span class="material-symbols-outlined text-[18px] text-secondary absolute right-2.5 top-3 pointer-events-none">history_edu</span>
+</div>
+</div>
+</div>
+<!-- EMPLOYER / BUSINESS FIELDS (Hidden by default) -->
+<div class="hidden flex-col gap-3" id="section-employer">
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Registered Company Name</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">business</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="e.g. Standard Bank Group / SovTech" type="text"/>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-2">
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">CIPC Reg Number</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="2018/123456/07" type="text"/>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Industry Sector</label>
+<div class="relative bg-surface-container-low rounded-lg shadow-sm">
+<select class="w-full bg-transparent text-body-md font-body-md text-on-surface px-3 py-2.5 outline-none appearance-none cursor-pointer">
+<option value="fintech">Fintech &amp; Banking</option>
+<option value="software">Cloud / Software</option>
+<option value="consulting">Consulting &amp; Audit</option>
+<option value="telecom">Telecommunications</option>
+<option value="logistics">Logistics / Supply</option>
+</select>
+<span class="material-symbols-outlined text-[18px] text-secondary absolute right-2.5 top-3 pointer-events-none">expand_more</span>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Official Corporate Email</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">domain</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="talent-team@company.co.za" type="email"/>
+</div>
+<span class="text-body-sm font-body-sm text-on-surface-variant pt-0.5">Generic inboxes (@gmail, @yahoo) require secondary manual phone audit</span>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-label-md font-label-md text-on-surface">Primary Contact Person</label>
+<div class="flex items-center bg-surface-container-low px-3 py-2.5 rounded-lg shadow-sm focus-within:bg-surface transition-colors">
+<span class="material-symbols-outlined text-secondary text-[20px] mr-2">badge</span>
+<input class="bg-transparent w-full text-body-md font-body-md text-on-surface placeholder:text-outline outline-none" placeholder="Leanne Meyer (Head of Early Careers)" type="text"/>
+</div>
+</div>
+<!-- Subscription Plan Card -->
+<div class="p-3.5 bg-surface-container-high rounded-xl shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[20px]">verified</span>
+<span class="text-label-lg font-label-lg text-on-surface">Employer Starter Trial</span>
+</div>
+<span class="text-label-badge font-label-badge px-2 py-0.5 bg-primary text-on-primary rounded-full font-bold">R199 / MONTH</span>
+</div>
+<p class="text-body-sm font-body-sm text-on-surface-variant">
+          Includes verified Richfield employer trust badge, zero placement commission on tech graduates, and 25 direct interview requests/month.
+        </p>
+</div>
+<!-- Career Center Note -->
+<div class="p-3 bg-secondary-container/50 rounded-lg flex items-start gap-2.5">
+<span class="material-symbols-outlined text-secondary text-[20px] shrink-0 mt-0.5">schedule</span>
+<div class="text-body-sm font-body-sm text-on-secondary-container">
+<strong class="font-label-md">24-Hour Career Center Verification:</strong> Applications are reviewed directly by the Richfield Work-Integrated Learning Directorate before candidate reachout is enabled.
+        </div>
+</div>
+</div>
+<!-- Terms and Conditions -->
+<div class="pt-2 flex flex-col gap-2">
+<label class="flex items-start gap-2.5 cursor-pointer">
+<input class="mt-1 w-4 h-4 rounded text-primary focus:ring-0 accent-primary cursor-pointer" id="terms-chk" required="" type="checkbox"/>
+<span class="text-body-sm font-body-sm text-on-surface-variant leading-relaxed">
+          I agree to the <a class="text-primary font-label-md underline underline-offset-2" href="#">Richfield Network POPIA Terms</a> and consent to cross-matching my identity with institutional registrar databases.
+        </span>
+</label>
+</div>
+<!-- Primary Action Button -->
+<button class="w-full mt-2 py-3 px-4 bg-primary text-on-primary rounded-xl text-label-lg font-label-lg shadow-md hover:bg-primary/95 active:scale-[0.99] transition-transform flex items-center justify-center gap-2" id="submit-btn" type="submit">
+<span class="material-symbols-outlined text-[20px]">how_to_reg</span>
+<span id="btn-text">Create Verified Student Account</span>
+</button>
+<!-- Supabase Auth Notice -->
+<div class="flex items-center justify-center gap-1.5 py-1 text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px] text-emerald-600">lock</span>
+<span class="text-body-sm font-body-sm font-medium">Supabase Auth Ready for Backend Integration</span>
+</div>
+<!-- Micro Testimonial / Placement Stat -->
+<div class="mt-1 p-3 bg-surface-container rounded-xl flex items-center justify-between shadow-sm">
+<div class="flex items-center gap-2">
+<div class="w-7 h-7 rounded-full bg-tertiary-fixed flex items-center justify-center text-on-tertiary-fixed text-label-badge font-label-badge">
+          92%
+        </div>
+<div class="flex flex-col">
+<span class="text-label-md font-label-md text-on-surface">Graduate Placement Index</span>
+<span class="text-body-sm font-body-sm text-on-surface-variant">Class of 2024 placed within 6 months</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-secondary text-[20px]">trending_up</span>
+</div>
+</form>
+</div>
+<script>
+function switchRole(role) {
+  const studentBtn = document.getElementById('role-btn-student');
+  const alumniBtn = document.getElementById('role-btn-alumni');
+  const employerBtn = document.getElementById('role-btn-employer');
+
+  const secStudent = document.getElementById('section-student');
+  const secAlumni = document.getElementById('section-alumni');
+  const secEmployer = document.getElementById('section-employer');
+
+  const heading = document.getElementById('role-heading');
+  const subheading = document.getElementById('role-subheading');
+  const badgePill = document.getElementById('role-badge-pill');
+  const roleIcon = document.getElementById('role-icon');
+  const roleIconBox = document.getElementById('role-icon-box');
+  const btnText = document.getElementById('btn-text');
+
+  // Reset switcher styles
+  [studentBtn, alumniBtn, employerBtn].forEach(btn => {
+    btn.className = "flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 text-on-surface-variant hover:text-on-surface";
+  });
+
+  // Hide sections
+  secStudent.classList.add('hidden');
+  secStudent.classList.remove('flex');
+  secAlumni.classList.add('hidden');
+  secAlumni.classList.remove('flex');
+  secEmployer.classList.add('hidden');
+  secEmployer.classList.remove('flex');
+
+  if (role === 'student') {
+    studentBtn.className = "flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 bg-surface shadow-sm text-primary font-bold";
+    secStudent.classList.remove('hidden');
+    secStudent.classList.add('flex');
+    heading.textContent = "Enrolled Student Registration";
+    subheading.textContent = "Instant institutional database match via student email";
+    badgePill.textContent = "ID VERIFIED";
+    roleIcon.textContent = "school";
+    roleIconBox.className = "w-8 h-8 rounded-lg bg-secondary text-on-secondary flex items-center justify-center shadow-sm";
+    btnText.textContent = "Create Verified Student Account";
+  } else if (role === 'alumni') {
+    alumniBtn.className = "flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 bg-surface shadow-sm text-primary font-bold";
+    secAlumni.classList.remove('hidden');
+    secAlumni.classList.add('flex');
+    heading.textContent = "Alumni Graduate Verification";
+    subheading.textContent = "Reconnect and access vetted executive tech hiring pipelines";
+    badgePill.textContent = "ALUMNI CIRCLE";
+    roleIcon.textContent = "workspace_premium";
+    roleIconBox.className = "w-8 h-8 rounded-lg bg-tertiary text-on-tertiary flex items-center justify-center shadow-sm";
+    btnText.textContent = "Claim Verified Alumni Status";
+  } else if (role === 'employer') {
+    employerBtn.className = "flex-1 py-2 px-2 rounded-lg text-label-md font-label-md transition-all flex flex-col items-center justify-center gap-1 bg-surface shadow-sm text-primary font-bold";
+    secEmployer.classList.remove('hidden');
+    secEmployer.classList.add('flex');
+    heading.textContent = "Corporate Recruiter Portal";
+    subheading.textContent = "Hire industry-ready Richfield BSc & BCom talent directly";
+    badgePill.textContent = "HIRING PARTNER";
+    roleIcon.textContent = "corporate_fare";
+    roleIconBox.className = "w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center shadow-sm";
+    btnText.textContent = "Submit Employer Accreditation";
+  }
+}
+
+function handleAlumniUpload(input) {
+  if (input.files && input.files[0]) {
+    const label = document.getElementById('upload-label');
+    label.textContent = "Attached: " + input.files[0].name;
+    label.classList.add('text-primary', 'font-bold');
+  }
+}
+
+function triggerAuthSuccess() {
+  const btn = document.getElementById('submit-btn');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="material-symbols-outlined text-[20px] animate-spin">sync</span><span>Transmitting credentials to Supabase...</span>`;
+  
+  setTimeout(() => {
+    btn.innerHTML = `<span class="material-symbols-outlined text-[20px]">check_circle</span><span>Handshake Complete! Redirecting...</span>`;
+    btn.classList.remove('bg-primary');
+    btn.classList.add('bg-emerald-600');
+    setTimeout(() => {
+      btn.innerHTML = originalHtml;
+      btn.classList.add('bg-primary');
+      btn.classList.remove('bg-emerald-600');
+      btn.disabled = false;
+    }, 2400);
+  }, 1000);
+}
+</script></main></body></html>
