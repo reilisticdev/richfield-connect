@@ -5,17 +5,17 @@
 // code.html) for the 2026 Richfield Hackathon brief.
 //
 // SCOPE OF THIS FILE (read this before extending it):
-//   - This is a UI-layer prototype: screens, navigation, and the design
-//     system are fully built out. There is NO real backend behind it â€”
-//     every list, profile, and metric below is sample data declared in
-//     the "MOCK DATA" section so the app is runnable and demoable on
-//     day one.
-//   - Auth screens simulate the four Richfield user types (Student,
-//     Alumni, Corporate, Staff/Admin) but do not perform real
-//     authentication. See the README that ships alongside this file for
-//     how to wire up real auth, a database, and the four "must not be
-//     faked" technical features (real-time push, smart matching, NLP CV
-//     parsing, video transcoding) the hackathon brief grades separately.
+//   - UPDATE (mobile integration pass): LoginScreen, RegisterScreen, and
+//     sign-out on PortfolioScreen now call the real AuthService
+//     (../services/auth_service.dart) against a real Supabase project
+//     (see config/supabase_config.dart), and navigation runs through
+//     go_router (../router/app_router.dart) instead of manual Navigator
+//     calls â€” see _HomeGate in app_router.dart for how the post-login role
+//     (Feed vs BusinessHub vs AdminHub) gets resolved from `profiles`.
+//   - Everything else is still UI-layer prototype: the "MOCK DATA" section
+//     below (FeedScreen, Jobs/Network/Portfolio content, dashboards) is
+//     still sample data, not wired to real tables. That's the known,
+//     deliberate scope of this pass â€” swap it out next.
 //   - Two screens (Jobs, Network) had no corresponding Stitch export, so
 //     they were built to match the existing design system rather than
 //     left blank â€” swap them for your real designs when ready.
@@ -30,11 +30,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:go_router/go_router.dart';
+
+import 'config/supabase_config.dart';
+import 'services/auth_error_mapper.dart';
+import 'services/auth_service.dart';
+// app_router.dart imports this file back for the real screen widgets
+// (LoginScreen, RegisterScreen, RootShell) — a legal, ordinary circular
+// import in Dart, not a mistake.
+import 'router/app_router.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ThemeController.loadSaved();
-  runApp(RichfieldConnectApp());
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    anonKey: SupabaseConfig.anonKey,
+  );
+  final authService = AuthService(Supabase.instance.client);
+  runApp(RichfieldConnectApp(authService: authService));
 }
 
 class ThemeController {
@@ -213,7 +228,9 @@ class AppText {
 // =====================================================================
 
 class RichfieldConnectApp extends StatelessWidget {
-  RichfieldConnectApp({super.key});
+  RichfieldConnectApp({super.key, required this.authService});
+
+  final AuthService authService;
 
   @override
   Widget build(BuildContext context) {
@@ -245,7 +262,7 @@ class RichfieldConnectApp extends StatelessWidget {
       outlineVariant: AppColors.outlineVariant,
       );
 
-      return MaterialApp(
+      return MaterialApp.router(
       title: 'Richfield Graduate Network',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -256,7 +273,7 @@ class RichfieldConnectApp extends StatelessWidget {
         fontFamily: GoogleFonts.inter().fontFamily,
         splashFactory: InkRipple.splashFactory,
       ),
-          home: LoginScreen(),
+          routerConfig: buildAppRouter(authService),
         );
       },
     );
@@ -989,7 +1006,9 @@ class RichfieldHeader extends StatelessWidget {
 // =====================================================================
 
 class LoginScreen extends StatefulWidget {
-  LoginScreen({super.key});
+  LoginScreen({super.key, required this.authService});
+
+  final AuthService authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -999,11 +1018,37 @@ class _LoginScreenState extends State<LoginScreen> {
   RichfieldRole _selectedRole = RichfieldRole.student;
   bool _obscure = true;
   bool _trustDevice = true;
+  bool _submitting = false;
+  String? _errorMessage;
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  void _signIn() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => RootShell(role: _selectedRole)),
-    );
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  // Role tiles above are cosmetic (hint text/labels only) — signIn takes
+  // just email/password; the real role comes back from the profiles row
+  // after auth, and app_router.dart's redirect + _HomeGate route the user
+  // from there. No manual navigation here on purpose.
+  Future<void> _signIn() async {
+    setState(() {
+      _submitting = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.authService.signIn(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+    } catch (e) {
+      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -1169,6 +1214,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     : '${_selectedRole.label} Email', style: AppText.labelLg()),
               SizedBox(height: 6),
               TextField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.alternate_email, size: 18),
                     hintText: _selectedRole == RichfieldRole.corporate
@@ -1206,6 +1253,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               SizedBox(height: 6),
               TextField(
+                controller: _passwordController,
                 obscureText: _obscure,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.lock_outline, size: 18),
@@ -1232,11 +1280,17 @@ class _LoginScreenState extends State<LoginScreen> {
                 title: Text('Trust this device for 30 days via Richfield Mobile Token',
                     style: AppText.bodySm()),
               ),
+              if (_errorMessage != null) ...[
+                Padding(
+                  padding: EdgeInsets.only(bottom: AppSpace.sm),
+                  child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+                ),
+              ],
               SizedBox(height: AppSpace.sm),
               PrimaryButton(
-                label: 'SIGN IN AS ${_selectedRole.label.toUpperCase()}',
+                label: _submitting ? 'SIGNING IN…' : 'SIGN IN AS ${_selectedRole.label.toUpperCase()}',
                 icon: Icons.key_outlined,
-                onPressed: _signIn,
+                onPressed: _submitting ? null : _signIn,
               ),
               SizedBox(height: AppSpace.lg),
               Center(
@@ -1246,9 +1300,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   children: [
                     Text("Don't have an account yet? ", style: AppText.bodySm()),
                     GestureDetector(
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => RegisterScreen()),
-                      ),
+                      onTap: () => context.push('/signup'),
                       child: Text('Register here',
                           style: AppText.bodySm(color: AppColors.primary)
                               .copyWith(fontWeight: FontWeight.w700)),
@@ -1316,7 +1368,9 @@ class _RoleTile extends StatelessWidget {
 // =====================================================================
 
 class RegisterScreen extends StatefulWidget {
-  RegisterScreen({super.key});
+  RegisterScreen({super.key, required this.authService});
+
+  final AuthService authService;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -1325,14 +1379,62 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   int _tab = 0; // 0 = Student, 1 = Alumni, 2 = Employer
   bool _agreed = false;
+  bool _submitting = false;
+  String? _errorMessage;
+  final _fullNameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
   static final _tabs = ['Student', 'Alumni', 'Employer'];
   static final _tabIcons = [Icons.school_outlined, Icons.workspace_premium_outlined, Icons.apartment_outlined];
 
-  RichfieldRole _roleForTab(int tab) {
-    if (tab == 1) return RichfieldRole.alumni;
-    if (tab == 2) return RichfieldRole.corporate;
-    return RichfieldRole.student;
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  // Tab 0/1/2 -> the backend's SignupRole (distinct from the cosmetic
+  // RichfieldRole used for login-screen hint text). 'Employer' maps to
+  // 'business', matching supabase/migrations' user_role enum.
+  SignupRole get _signupRole {
+    switch (_tab) {
+      case 1:
+        return SignupRole.alumni;
+      case 2:
+        return SignupRole.business;
+      default:
+        return SignupRole.student;
+    }
+  }
+
+  Future<void> _submit() async {
+    // Naive split of "Full Legal Name" into first/last on the first space —
+    // a hackathon-pace shortcut, not a real name-parsing solution.
+    final fullName = _fullNameController.text.trim();
+    final spaceIndex = fullName.indexOf(' ');
+    final firstName = spaceIndex == -1 ? (fullName.isEmpty ? null : fullName) : fullName.substring(0, spaceIndex);
+    final lastName = spaceIndex == -1 ? null : fullName.substring(spaceIndex + 1).trim();
+
+    setState(() {
+      _submitting = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.authService.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+        role: _signupRole,
+        firstName: firstName,
+        lastName: lastName,
+      );
+    } catch (e) {
+      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -1443,7 +1545,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ),
               SizedBox(height: AppSpace.base),
-              _labeledField('Full Legal Name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline),
+              _labeledField('Full Legal Name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
+                  controller: _fullNameController),
               SizedBox(height: AppSpace.md),
               _labeledField('Student Number', '202209148', Icons.badge_outlined),
               SizedBox(height: AppSpace.md),
@@ -1451,6 +1554,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: AppText.labelLg()),
               SizedBox(height: 6),
               TextField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.alternate_email, size: 18),
                   hintText: _tab == 2 ? 'recruiter@company.co.za' : 's.dlamini22',
@@ -1494,6 +1599,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
               _tab == 2
                   ? _labeledField('Industry / Talent Focus', 'Software engineering and data', Icons.business_center_outlined)
                   : _labeledField('Faculty / Programme', 'BSc Information Technology', Icons.school_outlined),
+              SizedBox(height: AppSpace.md),
+              _labeledField('Password', 'At least 8 characters', Icons.lock_outline,
+                  controller: _passwordController, obscureText: true),
               SizedBox(height: AppSpace.base),
               CheckboxListTile(
                 value: _agreed,
@@ -1516,14 +1624,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ),
               ),
+              if (_errorMessage != null) ...[
+                Padding(
+                  padding: EdgeInsets.only(bottom: AppSpace.sm),
+                  child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+                ),
+              ],
               SizedBox(height: AppSpace.sm),
               PrimaryButton(
-                label: 'Create Verified ${_tabs[_tab]} Account',
+                label: _submitting ? 'Creating account…' : 'Create Verified ${_tabs[_tab]} Account',
                 icon: Icons.how_to_reg_outlined,
-                onPressed: _agreed
-                    ? () => Navigator.of(context).pushReplacement(
-                        MaterialPageRoute(builder: (_) => RootShell(role: _roleForTab(_tab))))
-                    : null,
+                onPressed: (_agreed && !_submitting) ? _submit : null,
               ),
               SizedBox(height: AppSpace.sm),
               Center(
@@ -1570,13 +1681,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _labeledField(String label, String hint, IconData icon) {
+  Widget _labeledField(String label, String hint, IconData icon,
+      {TextEditingController? controller, bool obscureText = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: AppText.labelLg()),
         SizedBox(height: 6),
         TextField(
+          controller: controller,
+          obscureText: obscureText,
           decoration: InputDecoration(
             prefixIcon: Icon(icon, size: 18),
             hintText: hint,
@@ -1785,8 +1899,9 @@ class AdminHubScreen extends StatelessWidget {
 
 class RootShell extends StatefulWidget {
   final RichfieldRole role;
+  final AuthService authService;
 
-  RootShell({super.key, required this.role});
+  RootShell({super.key, required this.role, required this.authService});
 
   @override
   State<RootShell> createState() => _RootShellState();
@@ -1803,7 +1918,7 @@ class _RootShellState extends State<RootShell> {
                 : FeedScreen(),
         JobsScreen(),
         NetworkScreen(),
-        PortfolioScreen(),
+        PortfolioScreen(authService: widget.authService),
       ];
 
   @override
@@ -2748,7 +2863,9 @@ class NetworkScreen extends StatelessWidget {
 // =====================================================================
 
 class PortfolioScreen extends StatefulWidget {
-  PortfolioScreen({super.key});
+  PortfolioScreen({super.key, required this.authService});
+
+  final AuthService authService;
 
   @override
   State<PortfolioScreen> createState() => _PortfolioScreenState();
@@ -2868,11 +2985,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
             ListTile(
               leading: Icon(Icons.logout, color: AppColors.error),
               title: Text('Log Out', style: TextStyle(color: AppColors.error)),
-              onTap: () {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => LoginScreen()),
-                  (route) => false,
-                );
+              onTap: () async {
+                Navigator.pop(context);
+                await widget.authService.signOut();
+                // go_router's redirect (listening to onAuthStateChange)
+                // bounces to /login on its own — no manual navigation here.
               },
             ),
           ],
