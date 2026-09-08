@@ -4,13 +4,14 @@
 // NOT called directly by any client. Two webhooks feed this one function:
 //
 //   1. INSERT on public.profiles          -> welcome email
-//   2. INSERT on public.verification_audit -> alumni approved/rejected
+//   2. INSERT on public.verification_audit -> alumni OR business decision
 //      (has the admin's `reason` text, which profiles alone doesn't)
 //
-// Business approval doesn't have an audit table yet (no
-// approve_business_account function exists in the migrations as of this
-// write-up) — the UPDATE-on-profiles fallback below covers it once that
-// lands, but confirm the exact shape with Reil before relying on it.
+// verification_audit rows carry exactly one of claim_id (alumni, via
+// approve/reject_alumni_verification) or business_id (business, via
+// approve_business_account - see supabase/migrations/021_business_approval.sql)
+// - branch on whichever is set. The old provisional profiles-UPDATE path
+// for business decisions is gone now that this table handles it for real.
 //
 // SECURITY: this function must not be publicly guessable-and-callable.
 // When you create the Database Webhook, add a custom HTTP header
@@ -69,7 +70,7 @@ Deno.serve(async (req) => {
   }
 
   const payload = await req.json();
-  const { type, table, record, old_record } = payload;
+  const { type, table, record } = payload;
 
   try {
     // --- Welcome email: fires when handle_new_user() inserts the row ----
@@ -81,47 +82,53 @@ Deno.serve(async (req) => {
       return new Response("welcome email sent", { status: 200 });
     }
 
-    // --- Alumni decision: fires when an admin calls approve/reject_alumni_verification ---
+    // --- Alumni/business decision: fires when an admin calls
+    // approve/reject_alumni_verification or approve_business_account.
+    // Exactly one of claim_id/business_id is set per row (enforced by
+    // verification_audit_exactly_one_target in 021_business_approval.sql).
     if (table === "verification_audit" && type === "INSERT") {
-      const { claim_id, decision, reason } = record;
+      const { claim_id, business_id, decision, reason } = record;
 
-      const { data: claim, error: claimError } = await supabase
-        .from("verification_claims")
-        .select("user_id")
-        .eq("id", claim_id)
-        .single();
-      if (claimError || !claim) throw new Error(`could not resolve claim ${claim_id}: ${claimError?.message}`);
+      if (claim_id) {
+        const { data: claim, error: claimError } = await supabase
+          .from("verification_claims")
+          .select("user_id")
+          .eq("id", claim_id)
+          .single();
+        if (claimError || !claim) throw new Error(`could not resolve claim ${claim_id}: ${claimError?.message}`);
 
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("email, first_name")
-        .eq("id", claim.user_id)
-        .single();
-      if (profileError || !profile?.email) throw new Error(`could not resolve profile for claim ${claim_id}`);
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("email, first_name")
+          .eq("id", claim.user_id)
+          .single();
+        if (profileError || !profile?.email) throw new Error(`could not resolve profile for claim ${claim_id}`);
 
-      const { subject, html } = decision === "approved"
-        ? alumniApprovedEmail({ firstName: profile.first_name ?? "there" })
-        : alumniRejectedEmail({ firstName: profile.first_name ?? "there", reason });
+        const { subject, html } = decision === "approved"
+          ? alumniApprovedEmail({ firstName: profile.first_name ?? "there" })
+          : alumniRejectedEmail({ firstName: profile.first_name ?? "there", reason });
 
-      await sendViaResend(profile.email, subject, html);
-      return new Response("alumni decision email sent", { status: 200 });
-    }
+        await sendViaResend(profile.email, subject, html);
+        return new Response("alumni decision email sent", { status: 200 });
+      }
 
-    // --- Business decision: provisional, pending Reil's approval function ---
-    // Fires on any profiles UPDATE where account_status flips away from
-    // 'pending' for a business-role row. Replace with an audit-table-backed
-    // trigger (like the alumni one above) once that function exists, so you
-    // get a real `reason` instead of none.
-    if (table === "profiles" && type === "UPDATE") {
-      const roleIsBusiness = record.role === "business";
-      const statusChanged = old_record?.account_status === "pending" && record.account_status !== "pending";
-      if (roleIsBusiness && statusChanged && record.email) {
-        const { subject, html } = record.account_status === "active"
-          ? businessApprovedEmail({ firstName: record.first_name ?? "there" })
-          : businessRejectedEmail({ firstName: record.first_name ?? "there", reason: null });
-        await sendViaResend(record.email, subject, html);
+      if (business_id) {
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("email, first_name")
+          .eq("id", business_id)
+          .single();
+        if (profileError || !profile?.email) throw new Error(`could not resolve profile for business ${business_id}`);
+
+        const { subject, html } = decision === "approved"
+          ? businessApprovedEmail({ firstName: profile.first_name ?? "there" })
+          : businessRejectedEmail({ firstName: profile.first_name ?? "there", reason });
+
+        await sendViaResend(profile.email, subject, html);
         return new Response("business decision email sent", { status: 200 });
       }
+
+      throw new Error("verification_audit row has neither claim_id nor business_id");
     }
 
     return new Response("no matching handler for this event", { status: 200 });
