@@ -1,0 +1,19 @@
+{
+  "name": "richfield-connect-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-off admin/ops scripts run locally against the live Supabase project. Not deployed anywhere.",
+  "type": "module",
+  "scripts": {
+    "provision-admin": "tsx provision-admin.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.115.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "dotenv": "^17.4.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
