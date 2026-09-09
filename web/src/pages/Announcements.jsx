@@ -1,21 +1,49 @@
 import { useState } from "react";
+import { supabase } from "../lib/supabase";
+
+const audienceToRole = {
+  Everyone: null,
+  Students: "student",
+  Alumni: "alumni",
+  "Business Users": "business",
+};
 
 function Announcements() {
   const [audience, setAudience] = useState("Everyone");
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
 
-  const sendAnnouncement = (e) => {
+  const sendAnnouncement = async (e) => {
     e.preventDefault();
 
     if (!title || !message) {
       return;
     }
 
-    alert(`Announcement sent to ${audience}.`);
+    setSending(true);
+    setError(null);
+    setSuccessMessage(null);
 
+    const { data, error } = await supabase.rpc("broadcast_announcement", {
+      announcement_title: title,
+      announcement_message: message,
+      target_role: audienceToRole[audience],
+    });
+
+    if (error) {
+      console.error("Error sending announcement:", error);
+      setError("Could not send announcement.");
+      setSending(false);
+      return;
+    }
+
+    setSuccessMessage(`Sent to ${data} user${data === 1 ? "" : "s"}.`);
     setTitle("");
     setMessage("");
+    setSending(false);
   };
 
   return (
@@ -28,6 +56,9 @@ function Announcements() {
           </p>
         </div>
       </div>
+
+      {error && <p className="form-error">{error}</p>}
+      {successMessage && <p className="form-success">{successMessage}</p>}
 
       <section className="admin-section">
         <div className="section-header">
@@ -87,8 +118,8 @@ function Announcements() {
             />
           </div>
 
-          <button type="submit" className="login-button">
-            Send Announcement
+          <button type="submit" className="login-button" disabled={sending}>
+            {sending ? "Sending..." : "Send Announcement"}
           </button>
         </form>
       </section>
