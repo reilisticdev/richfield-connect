@@ -36,6 +36,9 @@ import 'package:go_router/go_router.dart';
 import 'config/supabase_config.dart';
 import 'services/auth_error_mapper.dart';
 import 'services/auth_service.dart';
+import 'services/jobs_service.dart';
+import 'services/business_analytics_service.dart';
+import 'services/feed_service.dart';
 // app_router.dart imports this file back for the real screen widgets
 // (LoginScreen, RegisterScreen, RootShell) — a legal, ordinary circular
 // import in Dart, not a mistake.
@@ -459,6 +462,37 @@ class JobHighlight {
     required this.tags,
     required this.slots,
   });
+}
+
+// Maps a real `posts` row (joined to `profiles` for the author) onto the
+// existing FeedPost UI model, so FeedScreen's card widgets don't need to
+// change — only where the data comes from.
+FeedPost _feedPostFromRow(Map<String, dynamic> row) {
+  final profile = row['profiles'] as Map<String, dynamic>?;
+  final name = ('${profile?['first_name'] ?? ''} ${profile?['last_name'] ?? ''}').trim();
+  final role = profile?['role'] as String?;
+  final createdAt = DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now();
+  return FeedPost(
+    type: row['video_path'] != null ? FeedPostType.video : FeedPostType.text,
+    authorName: name.isEmpty ? 'Richfield Member' : name,
+    authorRole: role == null || role.isEmpty ? '' : role[0].toUpperCase() + role.substring(1),
+    verified: true,
+    timeAgo: _timeAgo(createdAt),
+    body: row['body'] as String? ?? '',
+    videoLabel: row['video_path'] != null ? 'Video post' : null,
+    videoDuration: row['video_path'] != null ? '' : null,
+    reactionCountA: 0,
+    reactionCountB: 0,
+    reactionCountC: 0,
+  );
+}
+
+String _timeAgo(DateTime dt) {
+  final diff = DateTime.now().difference(dt);
+  if (diff.inMinutes < 1) return 'Just now';
+  if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+  if (diff.inDays < 1) return '${diff.inHours}h ago';
+  return '${diff.inDays}d ago';
 }
 
 class JobListing {
@@ -1001,6 +1035,54 @@ class RichfieldHeader extends StatelessWidget {
   }
 }
 
+// Shared account-menu bottom sheet (Onboarding Tour / Log Out). Top-level so
+// every tab's RichfieldHeader.onAvatarTap can call it, not just Portfolio's.
+void _openAccountMenu(BuildContext context, AuthService authService) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: AppColors.surfaceContainerLowest,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+    ),
+    builder: (_) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.help_outline),
+            title: Text('Take the Onboarding Tour'),
+            onTap: () {
+              Navigator.pop(context);
+              _startOnboardingTour(context);
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.logout, color: AppColors.error),
+            title: Text('Log Out', style: TextStyle(color: AppColors.error)),
+            onTap: () async {
+              Navigator.pop(context);
+              await authService.signOut();
+              // go_router's redirect (listening to onAuthStateChange)
+              // bounces to /login on its own — no manual navigation here.
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+void _startOnboardingTour(BuildContext context) {
+  Navigator.of(context).push(
+    PageRouteBuilder(
+      opaque: false,
+      barrierDismissible: true,
+      pageBuilder: (_, __, ___) => OnboardingTourOverlay(),
+      transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+    ),
+  );
+}
+
 // =====================================================================
 // SECTION 5 â€” AUTH: LOGIN SCREEN
 // =====================================================================
@@ -1388,6 +1470,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   static final _tabs = ['Student', 'Alumni', 'Employer'];
   static final _tabIcons = [Icons.school_outlined, Icons.workspace_premium_outlined, Icons.apartment_outlined];
 
+  // No campuses lookup table exists in the DB (campus is a free-text
+  // column elsewhere in the schema) and the selection isn't persisted on
+  // signup yet — this list only makes the dropdown itself functional.
+  static const _campuses = ['Braamfontein', 'Cape Town', 'Durban', 'Pretoria', 'Nelspruit', 'Vereeniging'];
+  String _campus = _campuses.first;
+
   @override
   void dispose() {
     _fullNameController.dispose();
@@ -1548,8 +1636,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
               _labeledField('Full Legal Name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
                   controller: _fullNameController),
               SizedBox(height: AppSpace.md),
-              _labeledField('Student Number', '202209148', Icons.badge_outlined),
-              SizedBox(height: AppSpace.md),
+              if (_tab != 2) ...[
+                _labeledField('Student Number', '202209148', Icons.badge_outlined),
+                SizedBox(height: AppSpace.md),
+              ],
                 Text(_tab == 2 ? 'Business Work Email' : 'Mandatory Institutional Email',
                   style: AppText.labelLg()),
               SizedBox(height: 6),
@@ -1590,7 +1680,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ? _labeledField('Company Location', 'Sandton, Johannesburg', Icons.location_on_outlined)
                   : Row(
                       children: [
-                        Expanded(child: _labeledDropdown('Campus', 'Braamfontein')),
+                        Expanded(child: _campusDropdown()),
                         SizedBox(width: AppSpace.sm),
                         Expanded(child: _labeledField('Expected Year', '2025', Icons.calendar_today_outlined)),
                       ],
@@ -1706,6 +1796,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  Widget _campusDropdown() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Campus', style: AppText.labelLg()),
+        SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: _campus,
+          items: _campuses
+              .map((c) => DropdownMenuItem(value: c, child: Text(c, style: AppText.bodyMd())))
+              .toList(),
+          onChanged: (v) => setState(() => _campus = v ?? _campus),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: AppColors.surfaceContainerLowest,
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              borderSide: BorderSide(color: AppColors.outlineVariant),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _labeledDropdown(String label, String value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1744,7 +1860,11 @@ class AdminDashboardScreen extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
       children: [
-        RichfieldHeader(title: 'Admin Analytics', subtitle: 'STAFF TIER 1'),
+        RichfieldHeader(
+          title: 'Admin Analytics',
+          subtitle: 'STAFF TIER 1',
+          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
+        ),
         _dashboardBanner('Canvas Core: Ready for Deployment', AppColors.successGreen),
         SizedBox(height: AppSpace.base),
         SectionHeader(title: 'Operational Tickers'),
@@ -1777,38 +1897,148 @@ class AdminDashboardScreen extends StatelessWidget {
   }
 }
 
-class BusinessDashboardScreen extends StatelessWidget {
+class BusinessDashboardScreen extends StatefulWidget {
   BusinessDashboardScreen({super.key});
+
+  @override
+  State<BusinessDashboardScreen> createState() => _BusinessDashboardScreenState();
+}
+
+class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
+  final _authService = AuthService(Supabase.instance.client);
+  final _analytics = BusinessAnalyticsService(Supabase.instance.client);
+
+  bool _loading = true;
+  String? _error;
+  int _totalApplicants = 0;
+  List<MapEntry<String, int>> _topSkills = [];
+  List<Map<String, dynamic>> _engagement = [];
+  String _companyName = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final pipeline = await _analytics.fetchApplicantPipeline();
+      final skills = await _analytics.fetchSkillDistribution();
+      final engagement = await _analytics.fetchListingEngagement();
+
+      var companyName = '';
+      final businessId = _authService.currentUser?.id;
+      if (businessId != null) {
+        final bp = await Supabase.instance.client
+            .from('business_profiles')
+            .select('company_name')
+            .eq('profile_id', businessId)
+            .maybeSingle();
+        companyName = (bp?['company_name'] as String?) ?? '';
+      }
+
+      final total = pipeline.fold<int>(
+          0, (sum, r) => sum + ((r['applicant_count'] as num?)?.toInt() ?? 0));
+      final skillTotals = <String, int>{};
+      for (final row in skills) {
+        final name = row['skill_name'] as String?;
+        if (name == null) continue;
+        skillTotals[name] = (skillTotals[name] ?? 0) + ((row['candidate_count'] as num?)?.toInt() ?? 0);
+      }
+      final topSkills = skillTotals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+
+      if (!mounted) return;
+      setState(() {
+        _totalApplicants = total;
+        _topSkills = topSkills.take(3).toList();
+        _engagement = engagement;
+        _companyName = companyName;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = AuthErrorMapper.fromAny(e);
+        _loading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
       children: [
-        RichfieldHeader(title: 'Business Analytics', subtitle: 'ENTERPRISE PORTAL'),
-        _dashboardBanner('Discovery Tech Campus • Verified Partner', AppColors.secondary),
+        RichfieldHeader(
+          title: 'Business Analytics',
+          subtitle: 'ENTERPRISE PORTAL',
+          onAvatarTap: () => _openAccountMenu(context, _authService),
+        ),
+        _dashboardBanner(
+            _companyName.isEmpty ? 'Verified Partner' : '$_companyName • Verified Partner',
+            AppColors.secondary),
         SizedBox(height: AppSpace.base),
         SectionHeader(title: 'Company Verification'),
-        _checkRow('CIPC Registration Verified', 'Discovery Holdings'),
+        // Left as-is deliberately: business_profiles has no CIPC/MoA
+        // verification columns in the schema, so there's nothing real to
+        // swap these two rows for yet.
+        _checkRow('CIPC Registration Verified', _companyName.isEmpty ? 'On file' : _companyName),
         _checkRow('Work Email Domain Verified', '@discovery.co.za'),
         _checkRow('Richfield Academic MoA', 'In review'),
         SizedBox(height: AppSpace.base),
         SectionHeader(title: 'Talent Analytics'),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Total Applicant Pipeline', style: AppText.labelLg()),
-          Text('142', style: AppText.displayLgMobile(color: AppColors.primary)),
-          Text('Active Candidates', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-          SizedBox(height: AppSpace.sm),
-          LinearProgressIndicator(value: .72, color: AppColors.primary, backgroundColor: AppColors.surfaceContainerHigh),
-          SizedBox(height: AppSpace.md),
-          Text('Candidate Skill Distribution', style: AppText.labelLg()),
-          _skillBar('Python / Data Science', .42),
-          _skillBar('React Native & Web', .31),
-          _skillBar('AWS Cloud Solutions', .27),
-          SizedBox(height: AppSpace.sm),
-          Text('7-day Listing Engagement', style: AppText.labelLg()),
-          SizedBox(height: 54, child: CustomPaint(painter: _EngagementPainter(AppColors.primary))),
-        ])),
+        if (_loading)
+          Padding(
+            padding: EdgeInsets.all(AppSpace.xl),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        if (!_loading && _error != null)
+          Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+        if (!_loading && _error == null)
+          RoundedCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Total Applicant Pipeline', style: AppText.labelLg()),
+                Text('$_totalApplicants', style: AppText.displayLgMobile(color: AppColors.primary)),
+                Text('Active Candidates', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                SizedBox(height: AppSpace.md),
+                Text('Candidate Skill Distribution', style: AppText.labelLg()),
+                if (_topSkills.isEmpty)
+                  Text('No applications yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
+                else
+                  ..._topSkills.map((e) => _skillBar(
+                      e.key, _totalApplicants == 0 ? 0.0 : (e.value / _totalApplicants).clamp(0.0, 1.0))),
+                SizedBox(height: AppSpace.md),
+                // Replaces the mock's fabricated "7-day" trend chart:
+                // get_business_listing_engagement() returns one row per
+                // opportunity (view/application counts), not a daily time
+                // series, so a real per-listing summary is the honest
+                // equivalent rather than faking a trend against real totals.
+                Text('Listing Engagement', style: AppText.labelLg()),
+                if (_engagement.isEmpty)
+                  Text('No listings yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
+                else
+                  ..._engagement.map((row) => Padding(
+                        padding: EdgeInsets.only(top: AppSpace.sm),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(child: Text(row['title'] as String? ?? '', style: AppText.bodySm())),
+                            Text(
+                                '${row['application_count']}/${row['view_count']} views • ${row['engagement_rate']}%',
+                                style: AppText.labelMd()),
+                          ],
+                        ),
+                      )),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -1961,6 +2191,39 @@ class _FeedScreenState extends State<FeedScreen> {
   bool _showPinnedBanner = true;
   static const _filters = ['All Updates', 'Career Reels', 'Graduate Jobs'];
 
+  final _authService = AuthService(Supabase.instance.client);
+  final _feedService = FeedService(Supabase.instance.client);
+  bool _loadingPosts = true;
+  String? _postsError;
+  List<FeedPost> _posts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPosts();
+  }
+
+  Future<void> _loadPosts() async {
+    setState(() {
+      _loadingPosts = true;
+      _postsError = null;
+    });
+    try {
+      final rows = await _feedService.fetchRecentPosts();
+      if (!mounted) return;
+      setState(() {
+        _posts = rows.map(_feedPostFromRow).toList();
+        _loadingPosts = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _postsError = AuthErrorMapper.fromAny(e);
+        _loadingPosts = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -1968,7 +2231,11 @@ class _FeedScreenState extends State<FeedScreen> {
         ListView(
           padding: EdgeInsets.only(bottom: 90),
           children: [
-            RichfieldHeader(title: 'Feed', subtitle: 'RICHFIELD VERIFIED'),
+            RichfieldHeader(
+              title: 'Feed',
+              subtitle: 'RICHFIELD VERIFIED',
+              onAvatarTap: () => _openAccountMenu(context, _authService),
+            ),
             _spotlightStories(),
             if (_showPinnedBanner)
               Padding(
@@ -2009,15 +2276,31 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
             ),
             SizedBox(height: AppSpace.md),
-            ...MockData.feedPosts.where((post) => !_dismissedPosts.contains(post.authorName)).map(
-              (post) => Padding(
-                padding: EdgeInsets.fromLTRB(
-                    AppSpace.base, 0, AppSpace.base, AppSpace.base),
-                child: post.type == FeedPostType.text
-                    ? _TextPostCard(post: post)
-                    : _VideoPostCard(post: post),
+            if (_loadingPosts)
+              Padding(
+                padding: EdgeInsets.all(AppSpace.xl),
+                child: Center(child: CircularProgressIndicator()),
               ),
-            ),
+            if (!_loadingPosts && _postsError != null)
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+                child: Text(_postsError!, style: AppText.bodySm(color: AppColors.error)),
+              ),
+            if (!_loadingPosts && _postsError == null && _posts.isEmpty)
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+                child: Text('No posts yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+              ),
+            if (!_loadingPosts && _postsError == null)
+              ..._posts.where((post) => !_dismissedPosts.contains(post.authorName)).map(
+                (post) => Padding(
+                  padding: EdgeInsets.fromLTRB(
+                      AppSpace.base, 0, AppSpace.base, AppSpace.base),
+                  child: post.type == FeedPostType.text
+                      ? _TextPostCard(post: post)
+                      : _VideoPostCard(post: post),
+                ),
+              ),
           ],
         ),
         Positioned(
@@ -2634,18 +2917,144 @@ Widget _metricLabel(IconData icon, String label) {
 // system so the bottom nav has four real destinations, not placeholders.)
 // =====================================================================
 
-class JobsScreen extends StatelessWidget {
+class JobsScreen extends StatefulWidget {
   JobsScreen({super.key});
+
+  @override
+  State<JobsScreen> createState() => _JobsScreenState();
+}
+
+class _JobsScreenState extends State<JobsScreen> {
+  final _authService = AuthService(Supabase.instance.client);
+  final _jobsService = JobsService(Supabase.instance.client);
+  final _searchController = TextEditingController();
+
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _all = [];
+  String _typeFilter = 'All';
+  String _query = '';
+
+  static const _typeOptions = ['All', 'internship', 'learnership', 'part_time', 'graduate_vacancy'];
+  static const _typeLabels = {
+    'All': 'All',
+    'internship': 'Internship',
+    'learnership': 'Learnership',
+    'part_time': 'Part-time',
+    'graduate_vacancy': 'Graduate Vacancy',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await _jobsService.fetchApprovedOpportunities();
+      if (!mounted) return;
+      setState(() {
+        _all = rows;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = AuthErrorMapper.fromAny(e);
+        _loading = false;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _filtered => _all.where((o) {
+        final matchesType = _typeFilter == 'All' || o['opportunity_type'] == _typeFilter;
+        final title = (o['title'] as String? ?? '').toLowerCase();
+        final matchesQuery = _query.isEmpty || title.contains(_query.toLowerCase());
+        return matchesType && matchesQuery;
+      }).toList();
+
+  Future<void> _apply(Map<String, dynamic> job) async {
+    final studentId = _authService.currentUser?.id;
+    if (studentId == null) return;
+    try {
+      await _jobsService.apply(opportunityId: job['id'] as String, studentId: studentId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Applied to ${job['title']}.')));
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      final message = e.code == '23505'
+          ? "You've already applied to this role."
+          : AuthErrorMapper.fromPostgrestException(e);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  void _showDetails(Map<String, dynamic> job) {
+    final skills = (job['required_skills'] as List?)?.cast<String>() ?? [];
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(job['title'] as String? ?? 'Opportunity'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(job['description'] as String? ?? ''),
+              if (skills.isNotEmpty) ...[
+                SizedBox(height: AppSpace.sm),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: skills
+                      .map((s) => Pill(
+                            text: s,
+                            background: AppColors.surfaceContainerHigh,
+                            foreground: AppColors.onSurfaceVariant,
+                          ))
+                      .toList(),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Close')),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: EdgeInsets.only(bottom: 24),
       children: [
-        RichfieldHeader(title: 'Opportunities', subtitle: 'SMART-MATCHED FOR YOU'),
+        RichfieldHeader(
+          title: 'Opportunities',
+          subtitle: 'SMART-MATCHED FOR YOU',
+          onAvatarTap: () => _openAccountMenu(context, _authService),
+        ),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
           child: TextField(
+            controller: _searchController,
+            onChanged: (v) => setState(() => _query = v),
             decoration: InputDecoration(
               prefixIcon: Icon(Icons.search, size: 18),
               hintText: 'Search internships, learnerships, graduate rolesâ€¦',
@@ -2658,81 +3067,135 @@ class JobsScreen extends StatelessWidget {
             ),
           ),
         ),
+        SizedBox(height: AppSpace.sm),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+          child: SizedBox(
+            height: 34,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _typeOptions.length,
+              separatorBuilder: (_, __) => SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final opt = _typeOptions[i];
+                return ChoiceChip(
+                  label: Text(_typeLabels[opt]!),
+                  selected: _typeFilter == opt,
+                  onSelected: (_) => setState(() => _typeFilter = opt),
+                );
+              },
+            ),
+          ),
+        ),
         SizedBox(height: AppSpace.base),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
           child: SectionHeader(title: 'Matched to Your Profile'),
         ),
-        ...MockData.jobs.map(
-          (job) => Padding(
-            padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
-            child: RoundedCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.secondaryContainer,
-                          borderRadius: BorderRadius.circular(AppRadius.md),
-                        ),
-                        child: Icon(Icons.business_center_outlined, color: AppColors.secondary),
-                      ),
-                      SizedBox(width: AppSpace.sm),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(job.title, style: AppText.labelLg()),
-                            Text('${job.company} â€¢ ${job.location}',
-                                style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                          ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Pill(
-                          text: job.type,
-                          background: AppColors.tertiaryContainer.withOpacity(0.3),
-                          foreground: AppColors.tertiary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: AppSpace.sm),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: job.skills
-                        .map((s) => Pill(
-                              text: s,
-                              background: AppColors.surfaceContainerHigh,
-                              foreground: AppColors.onSurfaceVariant,
-                            ))
-                        .toList(),
-                  ),
-                  SizedBox(height: AppSpace.sm),
-                  Row(
-                    children: [
-                      SecondaryButton(label: 'View Details', icon: Icons.visibility_outlined),
-                      SizedBox(width: AppSpace.sm),
-                      Expanded(
-                        child: PrimaryButton(label: 'Apply', icon: Icons.send_outlined, fullWidth: true),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+        if (_loading)
+          Padding(
+            padding: EdgeInsets.all(AppSpace.xl),
+            child: Center(child: CircularProgressIndicator()),
           ),
-        ),
+        if (!_loading && _error != null)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+            child: Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+          ),
+        if (!_loading && _error == null && _filtered.isEmpty)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+            child: Text('No opportunities match right now.',
+                style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+          ),
+        if (!_loading && _error == null)
+          ..._filtered.map((job) {
+            final business = job['profiles']?['business_profiles'] as Map<String, dynamic>?;
+            final company = business?['company_name'] as String? ?? 'Unknown company';
+            final location = business?['location'] as String? ?? '';
+            final skills = (job['required_skills'] as List?)?.cast<String>() ?? [];
+            return Padding(
+              padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+              child: RoundedCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.secondaryContainer,
+                            borderRadius: BorderRadius.circular(AppRadius.md),
+                          ),
+                          child: Icon(Icons.business_center_outlined, color: AppColors.secondary),
+                        ),
+                        SizedBox(width: AppSpace.sm),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(job['title'] as String? ?? '', style: AppText.labelLg()),
+                                  Text(
+                                    '$company${location.isEmpty ? '' : ' â€¢ $location'}',
+                                    style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Pill(
+                            text: _typeLabels[job['opportunity_type']] ??
+                                job['opportunity_type'] as String? ??
+                                '',
+                            background: AppColors.tertiaryContainer.withOpacity(0.3),
+                            foreground: AppColors.tertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: AppSpace.sm),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: skills
+                          .map((s) => Pill(
+                                text: s,
+                                background: AppColors.surfaceContainerHigh,
+                                foreground: AppColors.onSurfaceVariant,
+                              ))
+                          .toList(),
+                    ),
+                    SizedBox(height: AppSpace.sm),
+                    Row(
+                      children: [
+                        SecondaryButton(
+                          label: 'View Details',
+                          icon: Icons.visibility_outlined,
+                          onPressed: () => _showDetails(job),
+                        ),
+                        SizedBox(width: AppSpace.sm),
+                        Expanded(
+                          child: PrimaryButton(
+                            label: 'Apply',
+                            icon: Icons.send_outlined,
+                            fullWidth: true,
+                            onPressed: () => _apply(job),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
       ],
     );
   }
@@ -2751,7 +3214,11 @@ class NetworkScreen extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.only(bottom: 24),
       children: [
-        RichfieldHeader(title: 'Network', subtitle: '482 CONNECTIONS'),
+        RichfieldHeader(
+          title: 'Network',
+          subtitle: '482 CONNECTIONS',
+          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
+        ),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
           child: TextField(
@@ -2874,6 +3341,17 @@ class PortfolioScreen extends StatefulWidget {
 class _PortfolioScreenState extends State<PortfolioScreen> {
   bool _recruiterVisible = true;
   bool _compactDensity = false;
+  Map<String, dynamic>? _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.authService.fetchOwnProfile().then((p) {
+      if (mounted) setState(() => _profile = p);
+    }).catchError((_) {
+      // Keep showing the placeholder header on failure — not fatal.
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2892,7 +3370,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                 ),
                 icon: Icon(Icons.analytics_outlined),
               ),
-              onAvatarTap: () => _openAccountMenu(context),
+              onAvatarTap: () => _openAccountMenu(context, widget.authService),
             ),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
@@ -2963,52 +3441,6 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     );
   }
 
-  void _openAccountMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
-      ),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.help_outline),
-              title: Text('Take the Onboarding Tour'),
-              onTap: () {
-                Navigator.pop(context);
-                _startOnboardingTour(context);
-              },
-            ),
-            ListTile(
-              leading: Icon(Icons.logout, color: AppColors.error),
-              title: Text('Log Out', style: TextStyle(color: AppColors.error)),
-              onTap: () async {
-                Navigator.pop(context);
-                await widget.authService.signOut();
-                // go_router's redirect (listening to onAuthStateChange)
-                // bounces to /login on its own — no manual navigation here.
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _startOnboardingTour(BuildContext context) {
-    Navigator.of(context).push(
-      PageRouteBuilder(
-        opaque: false,
-        barrierDismissible: true,
-        pageBuilder: (_, __, ___) => OnboardingTourOverlay(),
-        transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
-      ),
-    );
-  }
-
   void _openCareerAiSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -3019,6 +3451,15 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   Widget _profileHeaderCard() {
+    final firstName = _profile?['first_name'] as String? ?? '';
+    final lastName = _profile?['last_name'] as String? ?? '';
+    final fullName = ('$firstName $lastName').trim();
+    final displayName = fullName.isEmpty ? 'Richfield Member' : fullName;
+    final initials =
+        (firstName.isNotEmpty ? firstName[0] : '') + (lastName.isNotEmpty ? lastName[0] : '');
+    final headline = _profile?['professional_headline'] as String? ??
+        'Final Year BSc IT Student | Full-Stack Developer & Cloud Enthusiast';
+
     return RoundedCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3031,7 +3472,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                   CircleAvatar(
                     radius: 34,
                     backgroundColor: AppColors.secondaryContainer,
-                    child: Text('SK', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                    child: Text(initials.isEmpty ? '?' : initials,
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                   ),
                   Positioned(
                     right: 0,
@@ -3060,8 +3502,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                       fontSize: 9,
                     ),
                     SizedBox(height: 6),
-                    Text('Sipho Khumalo', style: AppText.headlineMd()),
-                    Text('Final Year BSc IT Student | Full-Stack Developer & Cloud Enthusiast',
+                    Text(displayName, style: AppText.headlineMd()),
+                    Text(headline,
                         style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                     SizedBox(height: 4),
                     Row(
