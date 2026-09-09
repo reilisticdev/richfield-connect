@@ -2038,16 +2038,26 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
                 if (_engagement.isEmpty)
                   Text('No listings yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
                 else
-                  ..._engagement.map((row) => Padding(
-                        padding: EdgeInsets.only(top: AppSpace.sm),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(child: Text(row['title'] as String? ?? '', style: AppText.bodySm())),
-                            Text(
-                                '${row['application_count']}/${row['view_count']} views • ${row['engagement_rate']}%',
-                                style: AppText.labelMd()),
-                          ],
+                  ..._engagement.map((row) => GestureDetector(
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ApplicantsScreen(
+                              opportunityId: row['opportunity_id'] as String,
+                              listingTitle: row['title'] as String? ?? 'Listing',
+                            ),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.only(top: AppSpace.sm),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(child: Text(row['title'] as String? ?? '', style: AppText.bodySm())),
+                              Text(
+                                  '${row['application_count']}/${row['view_count']} views • ${row['engagement_rate']}%',
+                                  style: AppText.labelMd()),
+                            ],
+                          ),
                         ),
                       )),
               ],
@@ -2264,6 +2274,134 @@ class _PostOpportunityScreenState extends State<PostOpportunityScreen> {
         ],
       ),
     );
+  }
+}
+
+/// Read-only list of who applied to one of the business's own listings.
+/// No accept/reject affordance here by design - just visibility.
+class ApplicantsScreen extends StatefulWidget {
+  final String opportunityId;
+  final String listingTitle;
+  ApplicantsScreen({super.key, required this.opportunityId, required this.listingTitle});
+
+  @override
+  State<ApplicantsScreen> createState() => _ApplicantsScreenState();
+}
+
+class _ApplicantsScreenState extends State<ApplicantsScreen> {
+  final _jobsService = JobsService(Supabase.instance.client);
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _applicants = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await _jobsService.fetchApplicants(opportunityId: widget.opportunityId);
+      if (!mounted) return;
+      setState(() {
+        _applicants = rows;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = AuthErrorMapper.fromAny(e);
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.listingTitle)),
+      body: _loading
+          ? Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Padding(
+                  padding: EdgeInsets.all(AppSpace.base),
+                  child: Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+                )
+              : _applicants.isEmpty
+                  ? Padding(
+                      padding: EdgeInsets.all(AppSpace.base),
+                      child: Text('No applicants yet.',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                    )
+                  : ListView.separated(
+                      padding: EdgeInsets.all(AppSpace.base),
+                      itemCount: _applicants.length,
+                      separatorBuilder: (_, __) => SizedBox(height: AppSpace.sm),
+                      itemBuilder: (_, i) => _applicantRow(_applicants[i]),
+                    ),
+    );
+  }
+
+  Widget _applicantRow(Map<String, dynamic> row) {
+    final profile = row['profiles'] as Map<String, dynamic>?;
+    final first = profile?['first_name'] as String? ?? '';
+    final last = profile?['last_name'] as String? ?? '';
+    final name = (profile == null) ? 'Former / inactive account' : '$first $last'.trim();
+    final headline = profile?['professional_headline'] as String?;
+    final initials = (first.isNotEmpty ? first[0] : '') + (last.isNotEmpty ? last[0] : '');
+    final status = row['status'] as String? ?? 'submitted';
+    final appliedAt = DateTime.tryParse(row['applied_at'] as String? ?? '');
+
+    return RoundedCard(
+      child: Row(
+        children: [
+          InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
+          SizedBox(width: AppSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
+                if (headline != null && headline.isNotEmpty)
+                  Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                if (appliedAt != null)
+                  Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
+                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          _statusPill(status),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusPill(String status) {
+    switch (status) {
+      case 'accepted':
+        return Pill(
+            text: 'Accepted',
+            background: AppColors.successGreenBg,
+            foreground: AppColors.successGreen);
+      case 'rejected':
+        return Pill(
+            text: 'Rejected', background: AppColors.errorContainer, foreground: AppColors.error);
+      case 'reviewed':
+        return Pill(
+            text: 'Reviewed',
+            background: AppColors.secondaryContainer,
+            foreground: AppColors.secondary);
+      default:
+        return Pill(
+            text: 'Submitted',
+            background: AppColors.surfaceContainerHigh,
+            foreground: AppColors.onSurfaceVariant);
+    }
   }
 }
 

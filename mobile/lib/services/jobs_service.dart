@@ -35,6 +35,25 @@ class JobsService {
     });
   }
 
+  /// Applicants to one of the caller's own opportunities, newest first.
+  /// RLS ("Business views applicants to own opportunities" on
+  /// applications, "Authenticated users can view active profiles" on
+  /// profiles) scopes this to the caller's own listing with no extra
+  /// filtering needed client-side. student_id is the only FK from
+  /// applications -> profiles, so the embed is unambiguous (same
+  /// reasoning as the business_profiles embed above). A null nested
+  /// profiles map means the applicant's account is no longer 'active' -
+  /// callers must fall back, not assume it's always present.
+  Future<List<Map<String, dynamic>>> fetchApplicants({required String opportunityId}) async {
+    final rows = await _client
+        .from('applications')
+        .select('student_id, status, applied_at, '
+            'profiles(first_name, last_name, professional_headline)')
+        .eq('opportunity_id', opportunityId)
+        .order('applied_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
   /// Business posts a new opportunity. RLS ("Business manages own
   /// opportunities") lets a business insert its own rows directly - no RPC
   /// needed. Status defaults to 'pending' at the DB level, so this
