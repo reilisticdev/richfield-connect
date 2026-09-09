@@ -27,6 +27,10 @@ function Sidebar() {
           Dashboard
         </NavLink>
 
+        <NavLink to="/analytics">
+          Analytics
+        </NavLink>
+
         <NavLink to="/moderation">
           Moderation
         </NavLink>

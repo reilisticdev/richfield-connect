@@ -730,9 +730,12 @@ class Pill extends StatelessWidget {
             Icon(icon, size: fontSize + 4, color: foreground),
             SizedBox(width: 4),
           ],
-          Text(
-            text,
-            style: AppText.labelBadge(color: foreground).copyWith(fontSize: fontSize),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.labelBadge(color: foreground).copyWith(fontSize: fontSize),
+            ),
           ),
         ],
       ),
@@ -1979,6 +1982,17 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
           subtitle: 'ENTERPRISE PORTAL',
           onAvatarTap: () => _openAccountMenu(context, _authService),
         ),
+        PrimaryButton(
+          label: 'Post New Opportunity',
+          icon: Icons.add_business_outlined,
+          onPressed: () async {
+            final posted = await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => PostOpportunityScreen()),
+            );
+            if (posted == true) _load();
+          },
+        ),
+        SizedBox(height: AppSpace.base),
         _dashboardBanner(
             _companyName.isEmpty ? 'Verified Partner' : '$_companyName • Verified Partner',
             AppColors.secondary),
@@ -2024,16 +2038,26 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
                 if (_engagement.isEmpty)
                   Text('No listings yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
                 else
-                  ..._engagement.map((row) => Padding(
-                        padding: EdgeInsets.only(top: AppSpace.sm),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(child: Text(row['title'] as String? ?? '', style: AppText.bodySm())),
-                            Text(
-                                '${row['application_count']}/${row['view_count']} views • ${row['engagement_rate']}%',
-                                style: AppText.labelMd()),
-                          ],
+                  ..._engagement.map((row) => GestureDetector(
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ApplicantsScreen(
+                              opportunityId: row['opportunity_id'] as String,
+                              listingTitle: row['title'] as String? ?? 'Listing',
+                            ),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.only(top: AppSpace.sm),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(child: Text(row['title'] as String? ?? '', style: AppText.bodySm())),
+                              Text(
+                                  '${row['application_count']}/${row['view_count']} views • ${row['engagement_rate']}%',
+                                  style: AppText.labelMd()),
+                            ],
+                          ),
                         ),
                       )),
               ],
@@ -2091,6 +2115,294 @@ class _EngagementPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant _EngagementPainter oldDelegate) => oldDelegate.color != color;
+}
+
+class PostOpportunityScreen extends StatefulWidget {
+  PostOpportunityScreen({super.key});
+
+  @override
+  State<PostOpportunityScreen> createState() => _PostOpportunityScreenState();
+}
+
+class _PostOpportunityScreenState extends State<PostOpportunityScreen> {
+  final _authService = AuthService(Supabase.instance.client);
+  final _jobsService = JobsService(Supabase.instance.client);
+
+  final _titleController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _skillsController = TextEditingController();
+  final _programmeController = TextEditingController();
+  String _type = 'internship';
+  bool _submitting = false;
+
+  static const _typeOptions = ['internship', 'learnership', 'part_time', 'graduate_vacancy'];
+  static const _typeLabels = {
+    'internship': 'Internship',
+    'learnership': 'Learnership',
+    'part_time': 'Part-time',
+    'graduate_vacancy': 'Graduate Vacancy',
+  };
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _skillsController.dispose();
+    _programmeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final title = _titleController.text.trim();
+    final description = _descriptionController.text.trim();
+    if (title.isEmpty || description.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Title and description are required.')));
+      return;
+    }
+
+    final businessId = _authService.currentUser?.id;
+    if (businessId == null) return;
+
+    final skills = _skillsController.text
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final programme = _programmeController.text.trim();
+
+    setState(() => _submitting = true);
+    try {
+      await _jobsService.postOpportunity(
+        businessId: businessId,
+        title: title,
+        description: description,
+        opportunityType: _type,
+        requiredSkills: skills,
+        programmeFilter: programme.isEmpty ? null : programme,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Submitted for admin approval.'), duration: Duration(seconds: 2)),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Post New Opportunity')),
+      body: ListView(
+        padding: EdgeInsets.all(AppSpace.base),
+        children: [
+          Text('Title', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _titleController,
+            decoration: InputDecoration(
+              hintText: 'e.g. Junior Software Developer Internship',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Description', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _descriptionController,
+            minLines: 4,
+            maxLines: 8,
+            decoration: InputDecoration(
+              hintText: 'What will this person do? What are you looking for?',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Type', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            value: _type,
+            items: _typeOptions
+                .map((t) => DropdownMenuItem(value: t, child: Text(_typeLabels[t]!)))
+                .toList(),
+            onChanged: (v) => setState(() => _type = v ?? _type),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Required Skills (comma-separated)', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _skillsController,
+            decoration: InputDecoration(
+              hintText: 'e.g. React, SQL, Python',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Programme Filter (optional)', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _programmeController,
+            decoration: InputDecoration(
+              hintText: 'e.g. BSc Information Technology',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.xl),
+          PrimaryButton(
+            label: 'Submit for Approval',
+            icon: Icons.send_outlined,
+            onPressed: _submitting ? null : _submit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Read-only list of who applied to one of the business's own listings.
+/// No accept/reject affordance here by design - just visibility.
+class ApplicantsScreen extends StatefulWidget {
+  final String opportunityId;
+  final String listingTitle;
+  ApplicantsScreen({super.key, required this.opportunityId, required this.listingTitle});
+
+  @override
+  State<ApplicantsScreen> createState() => _ApplicantsScreenState();
+}
+
+class _ApplicantsScreenState extends State<ApplicantsScreen> {
+  final _jobsService = JobsService(Supabase.instance.client);
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _applicants = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await _jobsService.fetchApplicants(opportunityId: widget.opportunityId);
+      if (!mounted) return;
+      setState(() {
+        _applicants = rows;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = AuthErrorMapper.fromAny(e);
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.listingTitle)),
+      body: _loading
+          ? Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Padding(
+                  padding: EdgeInsets.all(AppSpace.base),
+                  child: Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+                )
+              : _applicants.isEmpty
+                  ? Padding(
+                      padding: EdgeInsets.all(AppSpace.base),
+                      child: Text('No applicants yet.',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                    )
+                  : ListView.separated(
+                      padding: EdgeInsets.all(AppSpace.base),
+                      itemCount: _applicants.length,
+                      separatorBuilder: (_, __) => SizedBox(height: AppSpace.sm),
+                      itemBuilder: (_, i) => _applicantRow(_applicants[i]),
+                    ),
+    );
+  }
+
+  Widget _applicantRow(Map<String, dynamic> row) {
+    final profile = row['profiles'] as Map<String, dynamic>?;
+    final first = profile?['first_name'] as String? ?? '';
+    final last = profile?['last_name'] as String? ?? '';
+    final name = (profile == null) ? 'Former / inactive account' : '$first $last'.trim();
+    final headline = profile?['professional_headline'] as String?;
+    final initials = (first.isNotEmpty ? first[0] : '') + (last.isNotEmpty ? last[0] : '');
+    final status = row['status'] as String? ?? 'submitted';
+    final appliedAt = DateTime.tryParse(row['applied_at'] as String? ?? '');
+
+    return RoundedCard(
+      child: Row(
+        children: [
+          InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
+          SizedBox(width: AppSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
+                if (headline != null && headline.isNotEmpty)
+                  Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                if (appliedAt != null)
+                  Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
+                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          _statusPill(status),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusPill(String status) {
+    switch (status) {
+      case 'accepted':
+        return Pill(
+            text: 'Accepted',
+            background: AppColors.successGreenBg,
+            foreground: AppColors.successGreen);
+      case 'rejected':
+        return Pill(
+            text: 'Rejected', background: AppColors.errorContainer, foreground: AppColors.error);
+      case 'reviewed':
+        return Pill(
+            text: 'Reviewed',
+            background: AppColors.secondaryContainer,
+            foreground: AppColors.secondary);
+      default:
+        return Pill(
+            text: 'Submitted',
+            background: AppColors.surfaceContainerHigh,
+            foreground: AppColors.onSurfaceVariant);
+    }
+  }
 }
 
 class BusinessHubScreen extends StatelessWidget {
@@ -2228,7 +2540,9 @@ class _FeedScreenState extends State<FeedScreen> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        ListView(
+        RefreshIndicator(
+          onRefresh: _loadPosts,
+          child: ListView(
           padding: EdgeInsets.only(bottom: 90),
           children: [
             RichfieldHeader(
@@ -2302,14 +2616,18 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
           ],
+          ),
         ),
         Positioned(
           right: AppSpace.base,
           bottom: AppSpace.base,
           child: FloatingActionButton.extended(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => PostComposerScreen()),
-            ),
+            onPressed: () async {
+              final posted = await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => PostComposerScreen()),
+              );
+              if (posted == true) _loadPosts();
+            },
             backgroundColor: AppColors.primary,
             icon: Icon(Icons.add),
             label: Text('New Post / Video', style: AppText.labelLg(color: Colors.white)),
@@ -2703,6 +3021,46 @@ class PostComposerScreen extends StatefulWidget {
 class _PostComposerScreenState extends State<PostComposerScreen> {
   bool _isVideo = false;
   bool _hasAttachment = false;
+  bool _submitting = false;
+  final _bodyController = TextEditingController();
+  final _authService = AuthService(Supabase.instance.client);
+  final _feedService = FeedService(Supabase.instance.client);
+
+  @override
+  void dispose() {
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final body = _bodyController.text.trim();
+    if (body.isEmpty) return;
+
+    // Video posting isn't wired up (no capture/compression pipeline yet -
+    // explicitly out of scope). Text posts only for now.
+    if (_isVideo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Video posting is not available yet - try a text post.')),
+      );
+      return;
+    }
+
+    final authorId = _authService.currentUser?.id;
+    if (authorId == null) return;
+
+    setState(() => _submitting = true);
+    try {
+      await _feedService.createPost(authorId: authorId, body: body);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Posted'), duration: Duration(seconds: 1)));
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2721,6 +3079,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           ),
           SizedBox(height: AppSpace.base),
           TextField(
+            controller: _bodyController,
             minLines: 6,
             maxLines: 10,
             decoration: InputDecoration(
@@ -2742,10 +3101,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           ],
           SizedBox(height: AppSpace.xl),
           ElevatedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Submitted for review'), duration: Duration(seconds: 1)));
-              Navigator.pop(context);
-            },
+            onPressed: _submitting ? null : _submit,
             icon: Icon(Icons.send_outlined),
             label: Text(_isVideo ? 'Submit Video' : 'Publish Post'),
           ),
@@ -3240,7 +3596,7 @@ class NetworkScreen extends StatelessWidget {
           child: SectionHeader(title: 'People You May Know'),
         ),
         SizedBox(
-          height: 178,
+          height: 196,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
@@ -4237,12 +4593,14 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                       GestureDetector(
                         onTap: () => Navigator.pop(context),
                         child: Text('Skip Tour',
-                            style: AppText.labelMd(color: Colors.white70)),
+                            style: AppText.labelMd(
+                                color: AppColors.inverseOnSurface.withOpacity(0.7))),
                       ),
                     ],
                   ),
                   SizedBox(height: AppSpace.sm),
-                  Text(step.body, style: AppText.bodyMd(color: Colors.white)),
+                  Text(step.body,
+                      style: AppText.bodyMd(color: AppColors.inverseOnSurface)),
                   SizedBox(height: AppSpace.md),
                   Row(
                     children: [
@@ -4254,7 +4612,9 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                             width: active ? 16 : 6,
                             height: 6,
                             decoration: BoxDecoration(
-                              color: active ? AppColors.primary : Colors.white30,
+                              color: active
+                                  ? AppColors.primary
+                                  : AppColors.inverseOnSurface.withOpacity(0.3),
                               borderRadius: BorderRadius.circular(AppRadius.full),
                             ),
                           );
@@ -4264,7 +4624,13 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                       if (_step > 0)
                         TextButton(
                           onPressed: () => setState(() => _step -= 1),
-                          child: Text('Back', style: AppText.labelLg(color: Colors.white70)),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: Size(0, 0),
+                          ),
+                          child: Text('Back',
+                              style: AppText.labelLg(
+                                  color: AppColors.inverseOnSurface.withOpacity(0.7))),
                         ),
                       ElevatedButton(
                         onPressed: () {
@@ -4277,6 +4643,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         ),
                         child: Text(_step == _steps.length - 1 ? 'Done' : 'Next'),
                       ),
