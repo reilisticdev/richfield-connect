@@ -1,60 +1,91 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+
+function formatLabel(value) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function Events() {
-  const [events, setEvents] = useState([
-    {
-      id: 1,
-      title: "Richfield Tech Club Meetup",
-      date: "12 September 2026",
-      time: "10:00 AM",
-      location: "Umhlanga Campus",
-      status: "Published",
-    },
-    {
-      id: 2,
-      title: "Career Development Workshop",
-      date: "18 September 2026",
-      time: "1:00 PM",
-      location: "Main Lecture Hall",
-      status: "Draft",
-    },
-  ]);
+  const [events, setEvents] = useState([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [error, setError] = useState(null);
 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [location, setLocation] = useState("");
 
-  const createEvent = (e) => {
+  const fetchEvents = async () => {
+    setLoadingEvents(true);
+
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .order("event_date", { ascending: true });
+
+    if (error) {
+      console.error("Error fetching events:", error);
+      setError("Could not load events.");
+      setEvents([]);
+    } else {
+      setEvents(data || []);
+    }
+
+    setLoadingEvents(false);
+  };
+
+  useEffect(() => {
+    fetchEvents();
+  }, []);
+
+  const createEvent = async (e) => {
     e.preventDefault();
 
     if (!title || !date || !time || !location) {
       return;
     }
 
-    const newEvent = {
-      id: Date.now(),
-      title,
-      date,
-      time,
-      location,
-      status: "Draft",
-    };
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const event_date = new Date(`${date}T${time}`).toISOString();
 
-    setEvents((current) => [...current, newEvent]);
+    const { error } = await supabase.from("events").insert({
+      title,
+      event_date,
+      location,
+      status: "draft",
+      created_by: user.id,
+    });
+
+    if (error) {
+      console.error("Error creating event:", error);
+      setError("Could not create event.");
+      return;
+    }
 
     setTitle("");
     setDate("");
     setTime("");
     setLocation("");
+    fetchEvents();
   };
 
-  const publishEvent = (id) => {
+  const publishEvent = async (id) => {
+    const { error } = await supabase
+      .from("events")
+      .update({ status: "published" })
+      .eq("id", id);
+
+    if (error) {
+      console.error("Error publishing event:", error);
+      setError("Could not publish event.");
+      return;
+    }
+
     setEvents((current) =>
       current.map((event) =>
-        event.id === id
-          ? { ...event, status: "Published" }
-          : event
+        event.id === id ? { ...event, status: "published" } : event
       )
     );
   };
@@ -70,6 +101,8 @@ function Events() {
           </p>
         </div>
       </div>
+
+      {error && <p className="form-error">{error}</p>}
 
       {/* Create Event */}
       <section className="admin-section">
@@ -156,41 +189,67 @@ function Events() {
             <span>Actions</span>
           </div>
 
-          {events.map((event) => (
-            <div className="table-row" key={event.id}>
+          {loadingEvents ? (
+            <div className="table-row">
+              <div>Loading...</div>
+            </div>
+          ) : events.length === 0 ? (
+            <div className="table-row">
               <div>
-                <strong>{event.title}</strong>
-
-                <small>
-                  Official Richfield event
-                </small>
-              </div>
-
-              <div>
-                <strong>{event.date}</strong>
-                <small>{event.time}</small>
-              </div>
-
-              <div>{event.location}</div>
-
-              <div className="action-buttons">
-                <span
-                  className={`status-badge ${event.status.toLowerCase()}`}
-                >
-                  {event.status}
-                </span>
-
-                {event.status === "Draft" && (
-                  <button
-                    className="approve-button"
-                    onClick={() => publishEvent(event.id)}
-                  >
-                    Publish
-                  </button>
-                )}
+                <strong>No events yet</strong>
+                <small>Create the first event using the form above.</small>
               </div>
             </div>
-          ))}
+          ) : (
+            events.map((event) => {
+              const when = new Date(event.event_date);
+              const dateLabel = when.toLocaleDateString("en-ZA", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              });
+              const timeLabel = when.toLocaleTimeString("en-ZA", {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+
+              return (
+                <div className="table-row" key={event.id}>
+                  <div>
+                    <strong>{event.title}</strong>
+
+                    <small>
+                      Official Richfield event
+                    </small>
+                  </div>
+
+                  <div>
+                    <strong>{dateLabel}</strong>
+                    <small>{timeLabel}</small>
+                  </div>
+
+                  <div>{event.location}</div>
+
+                  <div className="action-buttons">
+                    <span
+                      className={`status-badge ${event.status}`}
+                    >
+                      {formatLabel(event.status)}
+                    </span>
+
+                    {event.status === "draft" && (
+                      <button
+                        className="approve-button"
+                        onClick={() => publishEvent(event.id)}
+                      >
+                        Publish
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </section>
     </div>

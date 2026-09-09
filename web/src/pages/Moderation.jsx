@@ -5,41 +5,22 @@ function Moderation() {
   const [businesses, setBusinesses] = useState([]);
   const [loadingBusinesses, setLoadingBusinesses] = useState(true);
 
-  const [alumni, setAlumni] = useState([
-    {
-      id: 1,
-      name: "Example Alumni",
-      verification: "Richfield student record",
-      status: "Pending",
-    },
-    {
-      id: 2,
-      name: "Sample Alumni",
-      verification: "Identity verification",
-      status: "Pending",
-    },
-  ]);
+  const [alumni, setAlumni] = useState([]);
+  const [loadingAlumni, setLoadingAlumni] = useState(true);
 
-  const [flaggedContent, setFlaggedContent] = useState([
-    {
-      id: 1,
-      content: "Reported post",
-      reportedBy: "Student user",
-      reason: "Under Review",
-      status: "Flagged",
-    },
-  ]);
+  const [flaggedContent, setFlaggedContent] = useState([]);
+  const [loadingFlagged, setLoadingFlagged] = useState(true);
 
-  useEffect(() => {
-    fetchPendingBusinesses();
-  }, []);
+  const [error, setError] = useState(null);
 
   const fetchPendingBusinesses = async () => {
     setLoadingBusinesses(true);
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, first_name, last_name, email, account_status")
+      .select(
+        "id, first_name, last_name, email, account_status, business_profiles(company_name)"
+      )
       .eq("role", "business")
       .eq("account_status", "pending");
 
@@ -53,17 +34,66 @@ function Moderation() {
     setLoadingBusinesses(false);
   };
 
-  const updateBusinessStatus = async (id, status) => {
-    const accountStatus =
-      status === "Approved" ? "active" : "rejected";
+  const fetchPendingAlumni = async () => {
+    setLoadingAlumni(true);
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({ account_status: accountStatus })
-      .eq("id", id);
+    const { data, error } = await supabase
+      .from("verification_claims")
+      .select(
+        "id, student_number, programme, campus, graduation_year, status, profiles(first_name, last_name, email)"
+      )
+      .eq("status", "pending");
+
+    if (error) {
+      console.error("Error fetching pending alumni claims:", error);
+      setAlumni([]);
+    } else {
+      setAlumni(data || []);
+    }
+
+    setLoadingAlumni(false);
+  };
+
+  const fetchFlaggedContent = async () => {
+    setLoadingFlagged(true);
+
+    const { data, error } = await supabase
+      .from("content_reports")
+      .select(
+        "id, content_id, content_type, reason, status, profiles(first_name, last_name)"
+      )
+      .eq("status", "pending");
+
+    if (error) {
+      console.error("Error fetching flagged content:", error);
+      setFlaggedContent([]);
+    } else {
+      setFlaggedContent(data || []);
+    }
+
+    setLoadingFlagged(false);
+  };
+
+  useEffect(() => {
+    fetchPendingBusinesses();
+    fetchPendingAlumni();
+    fetchFlaggedContent();
+  }, []);
+
+  const updateBusinessStatus = async (id, status) => {
+    const { error } =
+      status === "Approved"
+        ? await supabase.rpc("approve_business_account", {
+            target_business_id: id,
+          })
+        : await supabase.rpc("reject_business_account", {
+            target_business_id: id,
+            reason: null,
+          });
 
     if (error) {
       console.error("Error updating business status:", error);
+      setError("Could not update business account.");
       return;
     }
 
@@ -72,19 +102,53 @@ function Moderation() {
     );
   };
 
-  const updateAlumniStatus = (id, status) => {
-    setAlumni((current) =>
-      current.map((person) =>
-        person.id === id ? { ...person, status } : person
-      )
-    );
+  const updateAlumniStatus = async (id, status) => {
+    if (status === "Approved") {
+      const { error } = await supabase.rpc("approve_alumni_verification", {
+        claim_id: id,
+      });
+
+      if (error) {
+        console.error("Error approving alumni verification:", error);
+        setError("Could not approve alumni verification.");
+        return;
+      }
+    } else {
+      const reason =
+        window.prompt(
+          "Reason for rejection:",
+          "Documentation did not match student record"
+        ) ?? "Not specified";
+
+      const { error } = await supabase.rpc("reject_alumni_verification", {
+        claim_id: id,
+        reason,
+      });
+
+      if (error) {
+        console.error("Error rejecting alumni verification:", error);
+        setError("Could not reject alumni verification.");
+        return;
+      }
+    }
+
+    setAlumni((current) => current.filter((person) => person.id !== id));
   };
 
-  const updateContentStatus = (id, status) => {
+  const updateContentStatus = async (id, status) => {
+    const { error } = await supabase
+      .from("content_reports")
+      .update({ status })
+      .eq("id", id);
+
+    if (error) {
+      console.error("Error updating flagged content:", error);
+      setError("Could not update flagged content.");
+      return;
+    }
+
     setFlaggedContent((current) =>
-      current.map((content) =>
-        content.id === id ? { ...content, status } : content
-      )
+      current.filter((content) => content.id !== id)
     );
   };
 
@@ -99,6 +163,8 @@ function Moderation() {
           </p>
         </div>
       </div>
+
+      {error && <p className="form-error">{error}</p>}
 
       {/* Business Accounts */}
       <section className="admin-section">
@@ -140,9 +206,12 @@ function Moderation() {
               <div className="table-row" key={business.id}>
                 <div>
                   <strong>
-                    {business.first_name} {business.last_name}
+                    {business.business_profiles?.company_name ??
+                      `${business.first_name} ${business.last_name}`}
                   </strong>
-                  <small>Business registration</small>
+                  <small>
+                    {business.first_name} {business.last_name}
+                  </small>
                 </div>
 
                 <div>{business.email}</div>
@@ -187,8 +256,7 @@ function Moderation() {
           </div>
 
           <span className="count-badge">
-            {alumni.filter((person) => person.status === "Pending").length}{" "}
-            Pending
+            {alumni.length} Pending
           </span>
         </div>
 
@@ -200,42 +268,57 @@ function Moderation() {
             <span>Actions</span>
           </div>
 
-          {alumni.map((person) => (
-            <div className="table-row" key={person.id}>
+          {loadingAlumni ? (
+            <div className="table-row">
+              <div>Loading...</div>
+            </div>
+          ) : alumni.length === 0 ? (
+            <div className="table-row">
               <div>
-                <strong>{person.name}</strong>
-                <small>Alumni verification request</small>
-              </div>
-
-              <div>{person.verification}</div>
-
-              <div>
-                <span className={`status-badge ${person.status.toLowerCase()}`}>
-                  {person.status}
-                </span>
-              </div>
-
-              <div className="action-buttons">
-                <button
-                  className="approve-button"
-                  onClick={() =>
-                    updateAlumniStatus(person.id, "Approved")
-                  }
-                >
-                  Approve
-                </button>
-
-                <button
-                  className="reject-button"
-                  onClick={() =>
-                    updateAlumniStatus(person.id, "Rejected")
-                  }
-                >
-                  Reject
-                </button>
+                <strong>No alumni verification requests</strong>
+                <small>
+                  There are currently no alumni claims waiting for review.
+                </small>
               </div>
             </div>
-          ))}
+          ) : (
+            alumni.map((claim) => (
+              <div className="table-row" key={claim.id}>
+                <div>
+                  <strong>
+                    {claim.profiles?.first_name} {claim.profiles?.last_name}
+                  </strong>
+                  <small>Student no. {claim.student_number}</small>
+                </div>
+
+                <div>
+                  {claim.programme} — {claim.campus} ({claim.graduation_year})
+                </div>
+
+                <div>
+                  <span className="status-badge pending">
+                    Pending
+                  </span>
+                </div>
+
+                <div className="action-buttons">
+                  <button
+                    className="approve-button"
+                    onClick={() => updateAlumniStatus(claim.id, "Approved")}
+                  >
+                    Approve
+                  </button>
+
+                  <button
+                    className="reject-button"
+                    onClick={() => updateAlumniStatus(claim.id, "Rejected")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </section>
 
@@ -248,10 +331,7 @@ function Moderation() {
           </div>
 
           <span className="count-badge">
-            {flaggedContent.filter(
-              (content) => content.status === "Flagged"
-            ).length}{" "}
-            Review
+            {flaggedContent.length} Review
           </span>
         </div>
 
@@ -263,44 +343,53 @@ function Moderation() {
             <span>Actions</span>
           </div>
 
-          {flaggedContent.map((content) => (
-            <div className="table-row" key={content.id}>
+          {loadingFlagged ? (
+            <div className="table-row">
+              <div>Loading...</div>
+            </div>
+          ) : flaggedContent.length === 0 ? (
+            <div className="table-row">
               <div>
-                <strong>{content.content}</strong>
-                <small>Community post</small>
-              </div>
-
-              <div>{content.reportedBy}</div>
-
-              <div>
-                <span
-                  className={`status-badge ${content.status.toLowerCase()}`}
-                >
-                  {content.status}
-                </span>
-              </div>
-
-              <div className="action-buttons">
-                <button
-                  className="approve-button"
-                  onClick={() =>
-                    updateContentStatus(content.id, "Kept")
-                  }
-                >
-                  Keep
-                </button>
-
-                <button
-                  className="reject-button"
-                  onClick={() =>
-                    updateContentStatus(content.id, "Removed")
-                  }
-                >
-                  Remove
-                </button>
+                <strong>No flagged content</strong>
+                <small>There is currently nothing waiting for review.</small>
               </div>
             </div>
-          ))}
+          ) : (
+            flaggedContent.map((content) => (
+              <div className="table-row" key={content.id}>
+                <div>
+                  <strong>
+                    {content.content_type} #{content.content_id.slice(0, 8)}
+                  </strong>
+                  <small>Community {content.content_type}</small>
+                </div>
+
+                <div>
+                  {content.profiles
+                    ? `${content.profiles.first_name} ${content.profiles.last_name}`
+                    : "Unknown user"}
+                </div>
+
+                <div>{content.reason}</div>
+
+                <div className="action-buttons">
+                  <button
+                    className="approve-button"
+                    onClick={() => updateContentStatus(content.id, "dismissed")}
+                  >
+                    Keep
+                  </button>
+
+                  <button
+                    className="reject-button"
+                    onClick={() => updateContentStatus(content.id, "actioned")}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </section>
     </div>
@@ -308,4 +397,3 @@ function Moderation() {
 }
 
 export default Moderation;
-
