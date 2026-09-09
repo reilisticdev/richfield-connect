@@ -10,6 +10,7 @@ import Moderation from "./pages/Moderation";
 import Opportunities from "./pages/Opportunities";
 import Events from "./pages/Events";
 import Announcements from "./pages/Announcements";
+import Analytics from "./pages/Analytics";
 
 function AdminLayout({ children }) {
   return (
@@ -86,6 +87,15 @@ function App() {
           element={
             <ProtectedAdminPage>
               <Announcements />
+            </ProtectedAdminPage>
+          }
+        />
+
+        <Route
+          path="/analytics"
+          element={
+            <ProtectedAdminPage>
+              <Analytics />
             </ProtectedAdminPage>
           }
         />
