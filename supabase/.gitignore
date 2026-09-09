@@ -1,0 +1,3 @@
+# Supabase CLI local link/session state - never commit, can contain a
+# pooler connection string with an embedded database password.
+.temp/
