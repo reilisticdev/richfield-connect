@@ -197,6 +197,15 @@
   color: #64748b;
   line-height: 1.6;
 }
+
+.form-error {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
 .sidebar {
   width: 240px;
   min-height: 100vh;

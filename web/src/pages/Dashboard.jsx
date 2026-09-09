@@ -1,6 +1,68 @@
+import { useEffect, useState } from "react";
 import StatCard from "../components/StatCard";
+import { supabase } from "../lib/supabase";
 
 function Dashboard() {
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchStats = async () => {
+      setError(null);
+
+      const [mau, pipeline, pendingClaims, flagged, publishedOpportunities] =
+        await Promise.all([
+          supabase.rpc("get_admin_mau"),
+          supabase.rpc("get_admin_business_pipeline"),
+          supabase
+            .from("verification_claims")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "pending"),
+          supabase.rpc("get_admin_flagged_content_count"),
+          supabase
+            .from("opportunities")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "approved"),
+        ]);
+
+      const firstError = [
+        mau,
+        pipeline,
+        pendingClaims,
+        flagged,
+        publishedOpportunities,
+      ].find((result) => result.error)?.error;
+
+      if (firstError) {
+        console.error("Error loading dashboard stats:", firstError);
+        if (!cancelled) setError("Could not load dashboard stats.");
+        return;
+      }
+
+      const pendingBusinesses =
+        (pipeline.data || []).find((row) => row.status === "pending")
+          ?.total ?? 0;
+
+      if (!cancelled) {
+        setStats({
+          activeUsers: mau.data ?? 0,
+          pendingApprovals:
+            Number(pendingBusinesses) + Number(pendingClaims.count ?? 0),
+          flaggedContent: flagged.data ?? 0,
+          publishedOpportunities: publishedOpportunities.count ?? 0,
+        });
+      }
+    };
+
+    fetchStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="dashboard-page">
       <div className="dashboard-header">
@@ -10,28 +72,30 @@ function Dashboard() {
         </div>
       </div>
 
+      {error && <p className="form-error">{error}</p>}
+
       <div className="stats-grid">
         <StatCard
           title="Total Active Users"
-          value="—"
+          value={stats ? stats.activeUsers : "—"}
           description="All user types"
         />
 
         <StatCard
           title="Pending Approvals"
-          value="—"
+          value={stats ? stats.pendingApprovals : "—"}
           description="Business & alumni"
         />
 
         <StatCard
           title="Flagged Content"
-          value="—"
+          value={stats ? stats.flaggedContent : "—"}
           description="Requires review"
         />
 
         <StatCard
           title="Published Opportunities"
-          value="—"
+          value={stats ? stats.publishedOpportunities : "—"}
           description="Visible to students"
         />
       </div>
