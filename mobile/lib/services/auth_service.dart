@@ -82,7 +82,23 @@ class AuthService {
     return _client.auth.signInWithPassword(email: email, password: password);
   }
 
-  Future<void> signOut() => _client.auth.signOut();
+  Future<void> signOut() async {
+    await _client.auth.signOut();
+    _cachedProfile = null;
+    _cachedProfileUserId = null;
+    _cachedProfileAt = null;
+  }
+
+  // GoRouter's redirect callback (app_router.dart) calls fetchOwnProfile()
+  // on every navigation. Caching collapses that into one network round trip
+  // per _profileCacheTtl window instead of one per tab tap, while still
+  // picking up an account_status change (e.g. an admin approving a pending
+  // business) within a demo-reasonable window — an infinite cache would
+  // silently miss that until the next app restart.
+  Map<String, dynamic>? _cachedProfile;
+  String? _cachedProfileUserId;
+  DateTime? _cachedProfileAt;
+  static const _profileCacheTtl = Duration(seconds: 30);
 
   /// Fetches the caller's own profile row (role, account_status, etc).
   /// Any Postgres-level error here (RLS denial, missing row) surfaces as a
@@ -92,10 +108,23 @@ class AuthService {
     if (userId == null) {
       throw StateError('fetchOwnProfile called with no active session');
     }
-    return await _client
+
+    final cachedAt = _cachedProfileAt;
+    if (_cachedProfile != null &&
+        _cachedProfileUserId == userId &&
+        cachedAt != null &&
+        DateTime.now().difference(cachedAt) < _profileCacheTtl) {
+      return _cachedProfile!;
+    }
+
+    final profile = await _client
         .from('profiles')
         .select()
         .eq('id', userId)
         .single();
+    _cachedProfile = profile;
+    _cachedProfileUserId = userId;
+    _cachedProfileAt = DateTime.now();
+    return profile;
   }
 }
