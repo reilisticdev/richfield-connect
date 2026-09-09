@@ -15,6 +15,8 @@ function Events() {
   const [time, setTime] = useState("");
   const [location, setLocation] = useState("");
 
+  const [editingEventId, setEditingEventId] = useState(null);
+
   const fetchEvents = async () => {
     setLoadingEvents(true);
 
@@ -37,6 +39,57 @@ function Events() {
   useEffect(() => {
     fetchEvents();
   }, []);
+
+  const startEditing = (event) => {
+    const when = new Date(event.event_date);
+
+    const dateValue = `${when.getFullYear()}-${String(
+      when.getMonth() + 1
+    ).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")}`;
+
+    const timeValue = `${String(when.getHours()).padStart(2, "0")}:${String(
+      when.getMinutes()
+    ).padStart(2, "0")}`;
+
+    setEditingEventId(event.id);
+    setTitle(event.title);
+    setDate(dateValue);
+    setTime(timeValue);
+    setLocation(event.location || "");
+  };
+
+  const updateEvent = async (e) => {
+     e.preventDefault();
+
+     if (!editingEventId || !title || !date || !time || !location) {
+       return;
+      }
+
+     const event_date = new Date(`${date}T${time}`).toISOString();
+
+    const { error } = await supabase
+      .from("events")
+      .update({
+         title,
+         event_date,
+         location,
+       })
+      .eq("id", editingEventId);
+
+    if (error) {
+       console.error("Error updating event:", error);
+       setError("Could not update event.");
+       return;
+     }
+
+     setEditingEventId(null);
+     setTitle("");
+     setDate("");
+     setTime("");
+     setLocation("");
+
+     fetchEvents();
+  };
 
   const createEvent = async (e) => {
     e.preventDefault();
@@ -108,14 +161,19 @@ function Events() {
       <section className="admin-section">
         <div className="section-header">
           <div>
-            <h2>Create Event</h2>
+            <h2>{editingEventId ? "Edit Event" : "Create Event"}</h2>
             <p>
-              Add an official event to the Richfield Connect platform.
+              {editingEventId
+                 ? "Update the details of this official Richfield event."
+                 : "Add an official event to the Richfield Connect platform."}
             </p>
           </div>
         </div>
 
-        <form className="event-form" onSubmit={createEvent}>
+        <form
+           className="event-form"
+           onSubmit={editingEventId ? updateEvent : createEvent}
+        >
           <div className="form-group">
             <label htmlFor="event-title"> Event Title</label>
             <input
@@ -161,8 +219,25 @@ function Events() {
           </div>
 
           <button type="submit" className="login-button event-create-button">
-            Create Event
+            {editingEventId ? "Save Changes" : "Create Event"}
           </button>
+
+          {editingEventId && (
+            <button
+            type="button"
+             className="cancel-button"
+             onClick={() => {
+               setEditingEventId(null);
+               setTitle("");
+               setDate("");
+               setTime("");
+               setLocation("");
+             }}
+           >
+             Cancel Edit
+           </button>
+         )}
+         
         </form>
       </section>
 
@@ -231,21 +306,28 @@ function Events() {
                   <div>{event.location}</div>
 
                   <div className="action-buttons">
-                    <span
-                      className={`status-badge ${event.status}`}
+                   <span
+                       className={`status-badge ${event.status}`}
+                   >
+                       {formatLabel(event.status)}
+                   </span>
+
+                    <button
+                       className="approve-button"
+                       onClick={() => startEditing(event)}
                     >
-                      {formatLabel(event.status)}
-                    </span>
+                      Edit
+                    </button>
 
                     {event.status === "draft" && (
-                      <button
+                       <button
                         className="approve-button"
-                        onClick={() => publishEvent(event.id)}
-                      >
-                        Publish
-                      </button>
+                         onClick={() => publishEvent(event.id)}
+                       >
+                         Publish
+                       </button>
                     )}
-                  </div>
+                 </div>
                 </div>
               );
             })

@@ -12,8 +12,7 @@ function Dashboard() {
     const fetchStats = async () => {
       setError(null);
 
-      const [mau, pipeline, pendingClaims, flagged, publishedOpportunities] =
-        await Promise.all([
+      const [ mau, pipeline, pendingClaims, flagged, publishedOpportunities, events,] = await Promise.all([
           supabase.rpc("get_admin_mau"),
           supabase.rpc("get_admin_business_pipeline"),
           supabase
@@ -23,8 +22,10 @@ function Dashboard() {
           supabase.rpc("get_admin_flagged_content_count"),
           supabase
             .from("opportunities")
-            .select("id", { count: "exact", head: true })
-            .eq("status", "approved"),
+            .select("id, status"),
+          supabase
+            .from("events")
+            .select("id, status"),
         ]);
 
       const firstError = [
@@ -33,6 +34,7 @@ function Dashboard() {
         pendingClaims,
         flagged,
         publishedOpportunities,
+        events,
       ].find((result) => result.error)?.error;
 
       if (firstError) {
@@ -44,6 +46,17 @@ function Dashboard() {
       const pendingBusinesses =
         (pipeline.data || []).find((row) => row.status === "pending")
           ?.total ?? 0;
+ 
+      const pendingOpportunities =
+         (publishedOpportunities.data || []).filter(
+         (opportunity) => opportunity.status === "pending"
+         ).length;
+
+      const publishedEvents =
+         (events.data || []).filter((event) => event.status === "published").length;
+
+      const draftEvents =
+         (events.data || []).filter((event) => event.status === "draft").length;
 
       if (!cancelled) {
         setStats({
@@ -51,7 +64,15 @@ function Dashboard() {
           pendingApprovals:
             Number(pendingBusinesses) + Number(pendingClaims.count ?? 0),
           flaggedContent: flagged.data ?? 0,
-          publishedOpportunities: publishedOpportunities.count ?? 0,
+          publishedOpportunities: (publishedOpportunities.data || []).filter(
+             (opportunity) => opportunity.status === "approved"
+             ).length,
+             pendingOpportunities: pendingOpportunities,
+          events: {
+              total: events.data?.length ?? 0,
+             published: publishedEvents,
+             drafts: draftEvents,
+          },
         });
       }
     };
@@ -93,11 +114,29 @@ function Dashboard() {
           description="Requires review"
         />
 
+       <StatCard
+         title="Opportunities"
+         value={
+           stats
+             ? stats.publishedOpportunities + stats.pendingOpportunities
+             : "—"
+          }
+         description={
+            stats
+               ? `${stats.publishedOpportunities} Published · ${stats.pendingOpportunities} Pending`
+               : "Loading..."
+          }
+       />
+
         <StatCard
-          title="Published Opportunities"
-          value={stats ? stats.publishedOpportunities : "—"}
-          description="Visible to students"
-        />
+           title="Events"
+           value={stats ? stats.events.total : "—"}
+           description={
+             stats
+               ? `${stats.events.published} Published · ${stats.events.drafts} Drafts`
+               : "Loading..."
+           }
+         />
       </div>
 
       <div className="dashboard-section">

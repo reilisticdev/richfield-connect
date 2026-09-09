@@ -1,6 +1,20 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
 
 function Sidebar() {
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("Sign out error:", error);
+      return;
+    }
+
+    navigate("/login");
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -30,9 +44,8 @@ function Sidebar() {
         </NavLink>
       </nav>
 
-      {/* Sign out needs to be implemented with auth context and routing to login page */}
       <div className="sidebar-footer">
-        <button type="button">
+        <button type="button" onClick={handleSignOut}>
           Sign Out
         </button>
       </div>
