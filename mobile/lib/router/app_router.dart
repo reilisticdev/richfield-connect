@@ -64,9 +64,8 @@ GoRouter buildAppRouter(AuthService authService) {
         }
 
         // account_status / role live in `profiles`, not the JWT, so this
-        // needs an actual fetch. Cache it in your app's auth state
-        // provider rather than querying on every navigation — this is
-        // simplified for clarity.
+        // needs an actual fetch. AuthService.fetchOwnProfile() caches this
+        // for a short TTL so it isn't a full round trip on every navigation.
         try {
           final profile = await authService.fetchOwnProfile();
           final accountStatus = profile['account_status'] as String?;
@@ -81,10 +80,18 @@ GoRouter buildAppRouter(AuthService authService) {
           if (state.matchedLocation.startsWith('/admin') && role != 'administrator') {
             return '/home'; // not an admin — bounce, don't 403 silently
           }
-        } on PostgrestException {
-          // RLS denied the profile read or it doesn't exist yet — treat as
-          // not-yet-provisioned rather than crashing the redirect.
-          return '/login';
+        } on PostgrestException catch (e) {
+          // PGRST116 = .single() found zero (or >1) rows: genuinely no
+          // profile row exists yet for this signed-in user — treat as
+          // not-yet-provisioned. Any other Postgrest error (transient 5xx,
+          // a momentary RLS/connection hiccup) must NOT force a logout
+          // mid-session — stay on the current route instead.
+          if (e.code == 'PGRST116') {
+            return '/login';
+          }
+        } catch (_) {
+          // Non-Postgrest failure (e.g. a dropped connection). Same
+          // reasoning — don't force a logout over a transient error.
         }
       }
 
