@@ -3455,7 +3455,7 @@ class NetworkScreen extends StatelessWidget {
           child: SectionHeader(title: 'People You May Know'),
         ),
         SizedBox(
-          height: 178,
+          height: 196,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
