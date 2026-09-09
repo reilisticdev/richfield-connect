@@ -730,9 +730,12 @@ class Pill extends StatelessWidget {
             Icon(icon, size: fontSize + 4, color: foreground),
             SizedBox(width: 4),
           ],
-          Text(
-            text,
-            style: AppText.labelBadge(color: foreground).copyWith(fontSize: fontSize),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.labelBadge(color: foreground).copyWith(fontSize: fontSize),
+            ),
           ),
         ],
       ),
@@ -4452,12 +4455,14 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                       GestureDetector(
                         onTap: () => Navigator.pop(context),
                         child: Text('Skip Tour',
-                            style: AppText.labelMd(color: Colors.white70)),
+                            style: AppText.labelMd(
+                                color: AppColors.inverseOnSurface.withOpacity(0.7))),
                       ),
                     ],
                   ),
                   SizedBox(height: AppSpace.sm),
-                  Text(step.body, style: AppText.bodyMd(color: Colors.white)),
+                  Text(step.body,
+                      style: AppText.bodyMd(color: AppColors.inverseOnSurface)),
                   SizedBox(height: AppSpace.md),
                   Row(
                     children: [
@@ -4469,7 +4474,9 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                             width: active ? 16 : 6,
                             height: 6,
                             decoration: BoxDecoration(
-                              color: active ? AppColors.primary : Colors.white30,
+                              color: active
+                                  ? AppColors.primary
+                                  : AppColors.inverseOnSurface.withOpacity(0.3),
                               borderRadius: BorderRadius.circular(AppRadius.full),
                             ),
                           );
@@ -4479,7 +4486,13 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                       if (_step > 0)
                         TextButton(
                           onPressed: () => setState(() => _step -= 1),
-                          child: Text('Back', style: AppText.labelLg(color: Colors.white70)),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: Size(0, 0),
+                          ),
+                          child: Text('Back',
+                              style: AppText.labelLg(
+                                  color: AppColors.inverseOnSurface.withOpacity(0.7))),
                         ),
                       ElevatedButton(
                         onPressed: () {
@@ -4492,6 +4505,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         ),
                         child: Text(_step == _steps.length - 1 ? 'Done' : 'Next'),
                       ),
