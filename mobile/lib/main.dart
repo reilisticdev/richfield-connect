@@ -1979,6 +1979,17 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
           subtitle: 'ENTERPRISE PORTAL',
           onAvatarTap: () => _openAccountMenu(context, _authService),
         ),
+        PrimaryButton(
+          label: 'Post New Opportunity',
+          icon: Icons.add_business_outlined,
+          onPressed: () async {
+            final posted = await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => PostOpportunityScreen()),
+            );
+            if (posted == true) _load();
+          },
+        ),
+        SizedBox(height: AppSpace.base),
         _dashboardBanner(
             _companyName.isEmpty ? 'Verified Partner' : '$_companyName • Verified Partner',
             AppColors.secondary),
@@ -2091,6 +2102,166 @@ class _EngagementPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant _EngagementPainter oldDelegate) => oldDelegate.color != color;
+}
+
+class PostOpportunityScreen extends StatefulWidget {
+  PostOpportunityScreen({super.key});
+
+  @override
+  State<PostOpportunityScreen> createState() => _PostOpportunityScreenState();
+}
+
+class _PostOpportunityScreenState extends State<PostOpportunityScreen> {
+  final _authService = AuthService(Supabase.instance.client);
+  final _jobsService = JobsService(Supabase.instance.client);
+
+  final _titleController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _skillsController = TextEditingController();
+  final _programmeController = TextEditingController();
+  String _type = 'internship';
+  bool _submitting = false;
+
+  static const _typeOptions = ['internship', 'learnership', 'part_time', 'graduate_vacancy'];
+  static const _typeLabels = {
+    'internship': 'Internship',
+    'learnership': 'Learnership',
+    'part_time': 'Part-time',
+    'graduate_vacancy': 'Graduate Vacancy',
+  };
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _skillsController.dispose();
+    _programmeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final title = _titleController.text.trim();
+    final description = _descriptionController.text.trim();
+    if (title.isEmpty || description.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Title and description are required.')));
+      return;
+    }
+
+    final businessId = _authService.currentUser?.id;
+    if (businessId == null) return;
+
+    final skills = _skillsController.text
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final programme = _programmeController.text.trim();
+
+    setState(() => _submitting = true);
+    try {
+      await _jobsService.postOpportunity(
+        businessId: businessId,
+        title: title,
+        description: description,
+        opportunityType: _type,
+        requiredSkills: skills,
+        programmeFilter: programme.isEmpty ? null : programme,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Submitted for admin approval.'), duration: Duration(seconds: 2)),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Post New Opportunity')),
+      body: ListView(
+        padding: EdgeInsets.all(AppSpace.base),
+        children: [
+          Text('Title', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _titleController,
+            decoration: InputDecoration(
+              hintText: 'e.g. Junior Software Developer Internship',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Description', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _descriptionController,
+            minLines: 4,
+            maxLines: 8,
+            decoration: InputDecoration(
+              hintText: 'What will this person do? What are you looking for?',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Type', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            value: _type,
+            items: _typeOptions
+                .map((t) => DropdownMenuItem(value: t, child: Text(_typeLabels[t]!)))
+                .toList(),
+            onChanged: (v) => setState(() => _type = v ?? _type),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Required Skills (comma-separated)', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _skillsController,
+            decoration: InputDecoration(
+              hintText: 'e.g. React, SQL, Python',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.md),
+          Text('Programme Filter (optional)', style: AppText.labelLg()),
+          SizedBox(height: 6),
+          TextField(
+            controller: _programmeController,
+            decoration: InputDecoration(
+              hintText: 'e.g. BSc Information Technology',
+              filled: true,
+              fillColor: AppColors.surfaceContainerLow,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+            ),
+          ),
+          SizedBox(height: AppSpace.xl),
+          PrimaryButton(
+            label: 'Submit for Approval',
+            icon: Icons.send_outlined,
+            onPressed: _submitting ? null : _submit,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class BusinessHubScreen extends StatelessWidget {
@@ -2228,7 +2399,9 @@ class _FeedScreenState extends State<FeedScreen> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        ListView(
+        RefreshIndicator(
+          onRefresh: _loadPosts,
+          child: ListView(
           padding: EdgeInsets.only(bottom: 90),
           children: [
             RichfieldHeader(
@@ -2302,14 +2475,18 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
           ],
+          ),
         ),
         Positioned(
           right: AppSpace.base,
           bottom: AppSpace.base,
           child: FloatingActionButton.extended(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => PostComposerScreen()),
-            ),
+            onPressed: () async {
+              final posted = await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => PostComposerScreen()),
+              );
+              if (posted == true) _loadPosts();
+            },
             backgroundColor: AppColors.primary,
             icon: Icon(Icons.add),
             label: Text('New Post / Video', style: AppText.labelLg(color: Colors.white)),
@@ -2703,6 +2880,46 @@ class PostComposerScreen extends StatefulWidget {
 class _PostComposerScreenState extends State<PostComposerScreen> {
   bool _isVideo = false;
   bool _hasAttachment = false;
+  bool _submitting = false;
+  final _bodyController = TextEditingController();
+  final _authService = AuthService(Supabase.instance.client);
+  final _feedService = FeedService(Supabase.instance.client);
+
+  @override
+  void dispose() {
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final body = _bodyController.text.trim();
+    if (body.isEmpty) return;
+
+    // Video posting isn't wired up (no capture/compression pipeline yet -
+    // explicitly out of scope). Text posts only for now.
+    if (_isVideo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Video posting is not available yet - try a text post.')),
+      );
+      return;
+    }
+
+    final authorId = _authService.currentUser?.id;
+    if (authorId == null) return;
+
+    setState(() => _submitting = true);
+    try {
+      await _feedService.createPost(authorId: authorId, body: body);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Posted'), duration: Duration(seconds: 1)));
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2721,6 +2938,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           ),
           SizedBox(height: AppSpace.base),
           TextField(
+            controller: _bodyController,
             minLines: 6,
             maxLines: 10,
             decoration: InputDecoration(
@@ -2742,10 +2960,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           ],
           SizedBox(height: AppSpace.xl),
           ElevatedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Submitted for review'), duration: Duration(seconds: 1)));
-              Navigator.pop(context);
-            },
+            onPressed: _submitting ? null : _submit,
             icon: Icon(Icons.send_outlined),
             label: Text(_isVideo ? 'Submit Video' : 'Publish Post'),
           ),

@@ -16,4 +16,11 @@ class FeedService {
         .limit(limit);
     return List<Map<String, dynamic>>.from(rows as List);
   }
+
+  Future<void> createPost({required String authorId, required String body}) {
+    return _client.from('posts').insert({
+      'author_id': authorId,
+      'body': body,
+    });
+  }
 }

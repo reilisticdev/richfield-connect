@@ -34,4 +34,27 @@ class JobsService {
       'student_id': studentId,
     });
   }
+
+  /// Business posts a new opportunity. RLS ("Business manages own
+  /// opportunities") lets a business insert its own rows directly - no RPC
+  /// needed. Status defaults to 'pending' at the DB level, so this
+  /// automatically goes through the existing admin-approval step before
+  /// students can see it.
+  Future<void> postOpportunity({
+    required String businessId,
+    required String title,
+    required String description,
+    required String opportunityType,
+    List<String> requiredSkills = const [],
+    String? programmeFilter,
+  }) {
+    return _client.from('opportunities').insert({
+      'business_id': businessId,
+      'title': title,
+      'description': description,
+      'opportunity_type': opportunityType,
+      'required_skills': requiredSkills,
+      'programme_filter': programmeFilter,
+    });
+  }
 }
