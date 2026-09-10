@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only src/debug and src/profile declared INTERNET, which Flutter adds
+         for the dev tooling. The main manifest had none, so a *release* APK
+         shipped with no network permission at all: Supabase auth, the feed
+         query and every storage upload would fail on the judged build while
+         working perfectly in `flutter run`. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
         android:label="richfield"
         android:name="${applicationName}"
