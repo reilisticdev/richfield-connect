@@ -63,7 +63,15 @@ void main() async {
 
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-  await PushNotificationService.initialize();
+
+  // Deliberately NOT awaited. initialize() calls requestPermission(), which
+  // puts up the system notification dialog and doesn't return until the user
+  // answers it. Awaiting that here blocks runApp() — verified on an emulator
+  // 2026-09-11: the app rendered nothing but a grey screen behind the dialog
+  // for a full 60 seconds until Allow was tapped, and the FCM token only
+  // arrived afterwards. Letting it run in the background means the login
+  // screen paints immediately and the permission prompt appears over it.
+  unawaited(PushNotificationService.initialize());
 
   await ThemeController.loadSaved();
   await Supabase.initialize(
