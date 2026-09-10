@@ -78,7 +78,7 @@ void main() async {
   // existing session (the explicit call right after covers the case
   // where the stream's initial emission is missed by subscribing late).
   Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-    PushNotificationService.syncTokenIfSignedIn();
+    unawaited(PushNotificationService.syncTokenIfSignedIn());
   });
   unawaited(PushNotificationService.syncTokenIfSignedIn());
 
