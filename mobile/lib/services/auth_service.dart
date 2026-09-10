@@ -82,6 +82,21 @@ class AuthService {
     return _client.auth.signInWithPassword(email: email, password: password);
   }
 
+  /// Sends the GoTrue password-recovery email.
+  ///
+  /// Deliberately does NOT tell the caller whether the address exists.
+  /// GoTrue returns success either way, and the UI must show the same
+  /// confirmation regardless — otherwise the "Forgot password" form becomes
+  /// an account-enumeration oracle that reveals which student emails are
+  /// registered.
+  ///
+  /// With no redirectTo, the link in the email lands on the project's
+  /// configured Site URL. Set a deep link later if the reset should reopen
+  /// the app instead of a browser.
+  Future<void> sendPasswordReset(String email) {
+    return _client.auth.resetPasswordForEmail(email.trim());
+  }
+
   Future<void> signOut() async {
     await _client.auth.signOut();
     _cachedProfile = null;
