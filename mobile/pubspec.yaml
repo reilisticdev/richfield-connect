@@ -23,6 +23,8 @@ dependencies:
   # Opens a profile's external links (GitHub / LinkedIn / website) in the
   # system browser. _socialLinksRow() used to render them as plain Text.
   url_launcher: ^6.3.0
+  firebase_core: ^4.14.0
+  firebase_messaging: ^16.6.0
 
 dev_dependencies:
   flutter_test:

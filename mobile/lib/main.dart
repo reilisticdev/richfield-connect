@@ -1,5 +1,5 @@
 ﻿// =====================================================================
-// RICHFIELD GRADUATE NETWORK â€” Flutter UI Prototype
+// RICHFIELD GRADUATE NETWORK — Flutter UI Prototype
 // -----------------------------------------------------------------------
 // Converted from the Google Stitch HTML/Tailwind export (DESIGN.md +
 // code.html) for the 2026 Richfield Hackathon brief.
@@ -10,18 +10,18 @@
 //     (../services/auth_service.dart) against a real Supabase project
 //     (see config/supabase_config.dart), and navigation runs through
 //     go_router (../router/app_router.dart) instead of manual Navigator
-//     calls â€” see _HomeGate in app_router.dart for how the post-login role
+//     calls — see _HomeGate in app_router.dart for how the post-login role
 //     (Feed vs BusinessHub vs AdminHub) gets resolved from `profiles`.
 //   - Everything else is still UI-layer prototype: the "MOCK DATA" section
 //     below (FeedScreen, Jobs/Network/Portfolio content, dashboards) is
 //     still sample data, not wired to real tables. That's the known,
-//     deliberate scope of this pass â€” swap it out next.
+//     deliberate scope of this pass — swap it out next.
 //   - Two screens (Jobs, Network) had no corresponding Stitch export, so
 //     they were built to match the existing design system rather than
-//     left blank â€” swap them for your real designs when ready.
+//     left blank — swap them for your real designs when ready.
 //
 // Performance note: built with A14-class phones (iPhone 12 family /
-// iPhone SE 3rd gen / iPad Air 4) in mind â€” no heavyweight image
+// iPhone SE 3rd gen / iPad Air 4) in mind — no heavyweight image
 // decoding, no unnecessary rebuilds, `const` constructors used wherever
 // the widget tree allows it.
 // =====================================================================
@@ -50,9 +50,17 @@ import 'services/feed_service.dart';
 // (LoginScreen, RegisterScreen, RootShell) — a legal, ordinary circular
 // import in Dart, not a mistake.
 import 'router/app_router.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'services/push_notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  await PushNotificationService.initialize();
+
   await ThemeController.loadSaved();
   await Supabase.initialize(
     url: SupabaseConfig.url,
@@ -101,10 +109,10 @@ class RichfieldLogo extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 1 â€” DESIGN SYSTEM (colors, type scale, spacing, radii)
+// SECTION 1 — DESIGN SYSTEM (colors, type scale, spacing, radii)
 // Pulled 1:1 from DESIGN.md's YAML token block / code.html's Tailwind
 // config, which is the *implemented* palette (not the aspirational
-// "Crimson / Navy / Gold" palette described in DESIGN.md's prose â€” see
+// "Crimson / Navy / Gold" palette described in DESIGN.md's prose — see
 // the chat feedback on that mismatch).
 // =====================================================================
 
@@ -234,7 +242,7 @@ class AppText {
 }
 
 // =====================================================================
-// SECTION 2 â€” APP ROOT
+// SECTION 2 — APP ROOT
 // =====================================================================
 
 /// NOTE (theme repair): this used to be a StatelessWidget whose build ran
@@ -330,7 +338,7 @@ class _RichfieldConnectAppState extends State<RichfieldConnectApp> {
 }
 
 // =====================================================================
-// SECTION 3 â€” MOCK DATA MODELS + SAMPLE DATA
+// SECTION 3 — MOCK DATA MODELS + SAMPLE DATA
 // Everything here stands in for real API/database responses. Swap this
 // section out first when you connect a real backend.
 // =====================================================================
@@ -638,7 +646,7 @@ class MockData {
       iconColor: AppColors.secondary,
       iconBg: AppColors.secondaryContainer,
       title: 'AWS Certified Cloud Practitioner',
-      subtitle: 'Amazon Web Services â€¢ Verify ID: AWS-7890241 â€¢ Exp 2027',
+      subtitle: 'Amazon Web Services — Verify ID: AWS-7890241 — Exp 2027',
       tag: '',
     ),
     Credential(
@@ -646,7 +654,7 @@ class MockData {
       iconColor: AppColors.primary,
       iconBg: AppColors.onPrimaryContainer,
       title: "Dean's Commendation 2024",
-      subtitle: 'Richfield Faculty of IT â€¢ Top 1% GPA',
+      subtitle: 'Richfield Faculty of IT — Top 1% GPA',
       tag: 'Ref: RF-ACAD-2024-SK',
     ),
     Credential(
@@ -654,7 +662,7 @@ class MockData {
       iconColor: AppColors.tertiary,
       iconBg: AppColors.tertiaryContainer,
       title: 'Hackathon 1st Runner-Up',
-      subtitle: 'FinTech Disrupt SA 2024 Challenge â€¢ Real-time Payments',
+      subtitle: 'FinTech Disrupt SA 2024 Challenge — Real-time Payments',
       tag: '',
     ),
   ];
@@ -691,7 +699,7 @@ class MockData {
       iconBg: AppColors.onPrimaryContainer,
       title: 'SRC Technology Officer',
       org: 'Richfield Student Representative Council',
-      period: '2024 â€“ 2025',
+      period: '2024 – 2025',
       description:
           'Spearheaded the digitisation of student guild election voting systems, driving 78% student turnout without downtime.',
     ),
@@ -700,7 +708,7 @@ class MockData {
       iconBg: AppColors.secondaryContainer,
       title: 'Google DSC Lead',
       org: 'Developer Student Club Braamfontein',
-      period: '2023 â€“ 2024',
+      period: '2023 – 2024',
       description:
           'Organised weekly peer coding clinics, mentoring over 120 lower-cohort students in Git workflows and cloud deployments.',
     ),
@@ -720,7 +728,7 @@ class MockData {
     FeedPost(
       type: FeedPostType.text,
       authorName: 'Thabo Ndlovu',
-      authorRole: "Senior Software Engineer at Discover... â€¢ Alumni '21",
+      authorRole: "Senior Software Engineer at Discover... — Alumni '21",
       verified: true,
       timeAgo: '3h ago',
       body:
@@ -739,7 +747,7 @@ class MockData {
     FeedPost(
       type: FeedPostType.video,
       authorName: 'Amara Okafor',
-      authorRole: 'Student Ambassador & Full-Stack Dev... â€¢ 3rd Year IT',
+      authorRole: 'Student Ambassador & Full-Stack Dev... — 3rd Year IT',
       verified: true,
       timeAgo: '5h ago',
       body:
@@ -781,7 +789,7 @@ class MockData {
   static final suggestions = [
     ConnectionSuggestion(
       name: 'Priya Naidoo',
-      subtitle: 'BCom Business Admin â€¢ Class of 2025',
+      subtitle: 'BCom Business Admin — Class of 2025',
       initials: 'PN',
     ),
     ConnectionSuggestion(
@@ -791,18 +799,18 @@ class MockData {
     ),
     ConnectionSuggestion(
       name: 'Liam van der Merwe',
-      subtitle: 'BSc IT â€¢ Alumni 2022',
+      subtitle: 'BSc IT — Alumni 2022',
       initials: 'LV',
     ),
   ];
 }
 
 // =====================================================================
-// SECTION 4 â€” SHARED SMALL WIDGETS
+// SECTION 4 — SHARED SMALL WIDGETS
 // =====================================================================
 
 /// Small rounded pill used for verification badges, status tags, and
-/// filter chips throughout the app â€” mirrors the Stitch "chip" component.
+/// filter chips throughout the app — mirrors the Stitch "chip" component.
 class Pill extends StatelessWidget {
   final String text;
   final Color background;
@@ -1022,7 +1030,7 @@ class RoundedCard extends StatelessWidget {
   }
 }
 
-/// Circular initials avatar â€” stands in for a real profile photo so this
+/// Circular initials avatar — stands in for a real profile photo so this
 /// prototype never depends on network images.
 class InitialsAvatar extends StatelessWidget {
   final String initials;
@@ -1191,7 +1199,7 @@ void _startOnboardingTour(BuildContext context) {
 }
 
 // =====================================================================
-// SECTION 5 â€” AUTH: LOGIN SCREEN
+// SECTION 5 — AUTH: LOGIN SCREEN
 // =====================================================================
 
 class LoginScreen extends StatefulWidget {
@@ -1262,7 +1270,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Richfield Secure Vault Initialisingâ€¦', style: AppText.labelMd()),
+                          Text('Richfield Secure Vault Initialising…', style: AppText.labelMd()),
                           Text('256-Bit Hardware Handshake',
                               style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                         ],
@@ -1571,7 +1579,7 @@ class _RoleTile extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 6 â€” AUTH: REGISTER SCREEN
+// SECTION 6 — AUTH: REGISTER SCREEN
 // =====================================================================
 
 class RegisterScreen extends StatefulWidget {
@@ -1974,7 +1982,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 }
 
 // =====================================================================
-// SECTION 7 â€” ROOT SHELL (bottom navigation)
+// SECTION 7 — ROOT SHELL (bottom navigation)
 // =====================================================================
 
 class AdminDashboardScreen extends StatelessWidget {
@@ -2609,7 +2617,7 @@ class _RootShellState extends State<RootShell> {
 }
 
 // =====================================================================
-// SECTION 8 â€” FEED SCREEN
+// SECTION 8 — FEED SCREEN
 // =====================================================================
 
 class FeedScreen extends StatefulWidget {
@@ -2841,7 +2849,7 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Widget _spotlightStories() {
-    final stories = ['Lerato M.', 'Dev Hackathonâ€¦', 'Standard Bank Gradâ€¦'];
+    final stories = ['Lerato M.', 'Dev Hackathon…', 'Standard Bank Grad…'];
     return SizedBox(
       height: 96,
       child: ListView(
@@ -2974,7 +2982,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     borderRadius: BorderRadius.circular(AppRadius.full),
                   ),
                 ),
-                child: Text('RSVP Pass â†’'),
+                child: Text('RSVP Pass →'),
               ),
             ],
           ),
@@ -3071,7 +3079,7 @@ class _TextPostCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(job.title, style: AppText.labelLg()),
-                    Text('${job.company} â€¢ ${job.location}',
+                    Text('${job.company} • ${job.location}',
                         style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                   ],
                 ),
@@ -3642,8 +3650,8 @@ Widget _metricLabel(IconData icon, String label) {
 }
 
 // =====================================================================
-// SECTION 9 â€” JOBS SCREEN
-// (No Stitch export existed for this tab â€” built to match the design
+// SECTION 9 — JOBS SCREEN
+// (No Stitch export existed for this tab — built to match the design
 // system so the bottom nav has four real destinations, not placeholders.)
 // =====================================================================
 
@@ -3787,7 +3795,7 @@ class _JobsScreenState extends State<JobsScreen> {
             onChanged: (v) => setState(() => _query = v),
             decoration: InputDecoration(
               prefixIcon: Icon(Icons.search, size: 18),
-              hintText: 'Search internships, learnerships, graduate rolesâ€¦',
+              hintText: 'Search internships, learnerships, graduate roles…',
               filled: true,
               fillColor: AppColors.surfaceContainerLow,
               border: OutlineInputBorder(
@@ -3870,7 +3878,7 @@ class _JobsScreenState extends State<JobsScreen> {
                                 children: [
                                   Text(job['title'] as String? ?? '', style: AppText.labelLg()),
                                   Text(
-                                    '$company${location.isEmpty ? '' : ' â€¢ $location'}',
+                                    '$company${location.isEmpty ? '' : ' • $location'}',
                                     style: AppText.bodySm(color: AppColors.onSurfaceVariant),
                                   ),
                                 ],
@@ -3932,8 +3940,8 @@ class _JobsScreenState extends State<JobsScreen> {
 }
 
 // =====================================================================
-// SECTION 10 â€” NETWORK SCREEN
-// (Also built to match the design system â€” no Stitch export provided.)
+// SECTION 10 — NETWORK SCREEN
+// (Also built to match the design system — no Stitch export provided.)
 // =====================================================================
 
 class NetworkScreen extends StatelessWidget {
@@ -3954,7 +3962,7 @@ class NetworkScreen extends StatelessWidget {
           child: TextField(
             decoration: InputDecoration(
               prefixIcon: Icon(Icons.search, size: 18),
-              hintText: 'Search students, alumni, recruitersâ€¦',
+              hintText: 'Search students, alumni, recruiters…',
               filled: true,
               fillColor: AppColors.surfaceContainerLow,
               border: OutlineInputBorder(
@@ -4033,7 +4041,7 @@ class NetworkScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Zanele Mokoena', style: AppText.labelLg()),
-                      Text('BCom Accounting â€¢ Class of 2026',
+                      Text('BCom Accounting • Class of 2026',
                           style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                     ],
                   ),
@@ -4056,7 +4064,7 @@ class NetworkScreen extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 11 â€” PORTFOLIO SCREEN (most detailed â€” 1:1 with code.html)
+// SECTION 11 — PORTFOLIO SCREEN (most detailed — 1:1 with code.html)
 // =====================================================================
 
 class PortfolioScreen extends StatefulWidget {
@@ -4300,7 +4308,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Pill(
-                      text: 'VERIFIED STUDENT â€¢ @my.richfield.ac.za',
+                      text: 'VERIFIED STUDENT • @my.richfield.ac.za',
                       background: AppColors.successGreenBg,
                       foreground: AppColors.successGreen,
                       icon: Icons.verified_user,
@@ -4314,7 +4322,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     Row(
                       children: [
                         Icon(Icons.location_on_outlined, size: 12, color: AppColors.primary),
-                        Text(' Braamfontein â€¢ \'25',
+                        Text(' Braamfontein • \'25',
                             style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                       ],
                     ),
@@ -4501,7 +4509,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                         top: 8,
                         left: 8,
                         child: Pill(
-                          text: 'â˜… ${repo.stars}',
+                          text: '★ ${repo.stars}',
                           background: Colors.black.withOpacity(0.5),
                           foreground: Colors.white,
                         ),
@@ -4739,7 +4747,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 }
 
 // =====================================================================
-// SECTION 12 â€” RICHFIELD CAREER AI SHEET (profile assistant)
+// SECTION 12 — RICHFIELD CAREER AI SHEET (profile assistant)
 // =====================================================================
 
 class RichfieldCareerAiSheet extends StatelessWidget {
@@ -4827,7 +4835,7 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                             Text('72% Profile Strength', style: AppText.labelLg()),
                           ],
                         ),
-                        Text('GOOD START â€¢ TOP 28%',
+                        Text('GOOD START • TOP 28%',
                             style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
                       ],
                     ),
@@ -5006,7 +5014,7 @@ class RichfieldCareerAiSheet extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 13 â€” ONBOARDING TOUR OVERLAY
+// SECTION 13 — ONBOARDING TOUR OVERLAY
 // Simplified coach-mark sequence. In production, anchor each step to the
 // real widget's position with a GlobalKey + RenderBox instead of the
 // fixed offsets used here.
@@ -5025,7 +5033,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
   static final _steps = [
     (
       title: 'STEP 1 OF 4: WELCOME',
-      body: "This is your Portfolio â€” think of it as your always-on digital CV. Recruiters see this before they see you.",
+      body: "This is your Portfolio — think of it as your always-on digital CV. Recruiters see this before they see you.",
       top: 0.18,
     ),
     (
@@ -5035,7 +5043,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
     ),
     (
       title: 'STEP 3 OF 4: LET AI DO THE WORK',
-      body: "Tap the sparkle button any time to open Richfield Career AI â€” it reviews your profile and suggests the fastest ways to get noticed.",
+      body: "Tap the sparkle button any time to open Richfield Career AI — it reviews your profile and suggests the fastest ways to get noticed.",
       top: 0.5,
     ),
     (
@@ -5140,5 +5148,3 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
     );
   }
 }
-
-

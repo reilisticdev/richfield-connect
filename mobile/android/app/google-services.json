@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1058855871669",
+    "project_id": "richfield-connect",
+    "storage_bucket": "richfield-connect.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1058855871669:android:451f0cbff7074c1e8a0afc",
+        "android_client_info": {
+          "package_name": "com.example.richfield"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB1B_P5DvagaGNXH6yOnsYeCgGUO8FLNKg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
