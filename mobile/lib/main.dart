@@ -55,6 +55,8 @@ import 'router/app_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'services/push_notification_service.dart';
+import 'config/ai_config.dart';
+import 'services/ai_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1970,30 +1972,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _labeledDropdown(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: AppText.labelLg()),
-        SizedBox(height: 6),
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-            border: Border.all(color: AppColors.outlineVariant),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(value, style: AppText.bodyMd()),
-              Icon(Icons.expand_more, size: 18),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 // =====================================================================
@@ -2596,6 +2574,39 @@ class RootShell extends StatefulWidget {
 
 class _RootShellState extends State<RootShell> {
   int _index = 0;
+
+  // Rubric Section 6, item 4: "First-time users receive an interactive
+  // app tutorial." Before this, OnboardingTourOverlay only ever launched
+  // manually from the account menu ("Take the Onboarding Tour") — nothing
+  // triggered it automatically, so a first-time user who never opened
+  // that menu would never see it at all.
+  static const _tourSeenKey = 'richfield_onboarding_tour_seen';
+
+  @override
+  void initState() {
+    super.initState();
+    // addPostFrameCallback, not a direct call here: _startOnboardingTour
+    // does Navigator.of(context).push(...), and calling that before this
+    // widget's first frame has actually built is exactly the kind of
+    // "Navigator operation requested with a context that does not
+    // include a Navigator" crash this avoids.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTour());
+  }
+
+  Future<void> _maybeShowTour() async {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadySeen = prefs.getBool(_tourSeenKey) ?? false;
+    if (alreadySeen || !mounted) return;
+
+    // Set the flag before showing, not after dismissal — the manual
+    // "Take the Onboarding Tour" menu item is still there as a permanent
+    // fallback, so the cost of marking it seen a touch early is low, and
+    // it means repeatedly relaunching the app mid-testing (Keshav's
+    // actual workflow tonight) doesn't re-trigger it on every restart.
+    await prefs.setBool(_tourSeenKey, true);
+    if (!mounted) return;
+    _startOnboardingTour(context);
+  }
 
   List<Widget> get _screens => [
         widget.role == RichfieldRole.admin
@@ -3493,8 +3504,83 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   }
 }
 
-class AiProfileInputScreen extends StatelessWidget {
-  AiProfileInputScreen({super.key});
+class AiProfileInputScreen extends StatefulWidget {
+  /// initialMessage pre-fills the text box, from a query chip in
+  /// RichfieldCareerAiSheet. autoSubmit sends it immediately instead of
+  /// waiting for the user to tap Generate, so a chip tap feels like the
+  /// instant answer its label promises rather than a second manual step.
+  AiProfileInputScreen({super.key, this.initialMessage, this.autoSubmit = false});
+
+  final String? initialMessage;
+  final bool autoSubmit;
+
+  @override
+  State<AiProfileInputScreen> createState() => _AiProfileInputScreenState();
+}
+
+class _AiProfileInputScreenState extends State<AiProfileInputScreen> {
+  late final _messageController = TextEditingController(text: widget.initialMessage ?? '');
+  final _authService = AuthService(Supabase.instance.client);
+  final _profileService = ProfileService(Supabase.instance.client);
+  final _aiService = AiService(AiConfig.baseUrl);
+
+  bool _loading = false;
+  String? _error;
+  String? _reply;
+
+  @override
+  void initState() {
+    super.initState();
+    // Same reasoning as the tour auto-trigger in RootShell: don't touch
+    // BuildContext/network before the first frame has actually built.
+    if (widget.autoSubmit && (widget.initialMessage?.trim().isNotEmpty ?? false)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _generate());
+    }
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _generate() async {
+    final message = _messageController.text.trim();
+    if (message.isEmpty) {
+      setState(() => _error = 'Write something first — what are you trying to figure out?');
+      return;
+    }
+
+    final userId = _authService.currentUser?.id;
+    if (userId == null) {
+      setState(() => _error = 'Your session has expired. Sign in again.');
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      // AiService is stateless toward Supabase by design (see its header
+      // comment) — the client fetches the profile and hands it over,
+      // rather than the Flask service reaching into the database itself.
+      final profile = await _profileService.fetchProfile(userId);
+      final reply = await _aiService.chat(message: message, profile: profile);
+      if (!mounted) return;
+      setState(() {
+        _reply = reply;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e is AiServiceException ? e.message : AuthErrorMapper.fromAny(e);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3503,13 +3589,68 @@ class AiProfileInputScreen extends StatelessWidget {
       body: ListView(padding: EdgeInsets.all(AppSpace.base), children: [
         Text('Tell us about your goals', style: AppText.headlineMd()),
         SizedBox(height: AppSpace.xs),
-        Text('Add free-text experience and the assistant will suggest skills, projects, and profile sections.', style: AppText.bodyMd(color: AppColors.onSurfaceVariant)),
+        Text(
+          'Add free-text experience and the assistant will suggest skills, projects, and profile sections.',
+          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+        ),
         SizedBox(height: AppSpace.base),
-        TextField(minLines: 8, maxLines: 12, decoration: InputDecoration(hintText: 'Example: I built a Flutter app that...', filled: true, fillColor: AppColors.surfaceContainerLow, border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none))),
+        TextField(
+          controller: _messageController,
+          minLines: 8,
+          maxLines: 12,
+          decoration: InputDecoration(
+            hintText: 'Example: I built a Flutter app that...',
+            filled: true,
+            fillColor: AppColors.surfaceContainerLow,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+          ),
+        ),
         SizedBox(height: AppSpace.md),
-        ElevatedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('AI suggestions generated'), duration: Duration(seconds: 1))), icon: Icon(Icons.auto_awesome), label: Text('Generate Suggestions')),
-        SizedBox(height: AppSpace.base),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Suggested next steps', style: AppText.labelLg()), SizedBox(height: AppSpace.sm), Text('Add Docker, TypeScript, and PostgreSQL to your skills.', style: AppText.bodyMd()), Text('Highlight your campus navigator project and live demo.', style: AppText.bodyMd()), Text('Add a short career summary for recruiter searches.', style: AppText.bodyMd())])),
+        ElevatedButton.icon(
+          onPressed: _loading ? null : _generate,
+          icon: _loading
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary),
+                )
+              : Icon(Icons.auto_awesome),
+          label: Text(_loading ? 'Thinking...' : 'Generate Suggestions'),
+        ),
+        if (_error != null) ...[
+          SizedBox(height: AppSpace.sm),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, size: 16, color: AppColors.error),
+              SizedBox(width: 6),
+              Expanded(child: Text(_error!, style: AppText.bodySm(color: AppColors.error))),
+            ],
+          ),
+        ],
+        if (_reply != null) ...[
+          SizedBox(height: AppSpace.base),
+          RoundedCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.smart_toy_outlined, size: 16, color: AppColors.primary),
+                    SizedBox(width: 6),
+                    Text('Richfield Career AI', style: AppText.labelLg()),
+                  ],
+                ),
+                SizedBox(height: AppSpace.sm),
+                // Real Gemini output — free-form text, not the hardcoded
+                // three-line list this replaced. Showing exactly what the
+                // model said is more honest than reformatting it to look
+                // more structured than it actually is.
+                Text(_reply!, style: AppText.bodyMd()),
+              ],
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -4257,7 +4398,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => RichfieldCareerAiSheet(),
+      builder: (_) => RichfieldCareerAiSheet(profile: _profile),
     );
   }
 
@@ -4766,7 +4907,49 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 // =====================================================================
 
 class RichfieldCareerAiSheet extends StatelessWidget {
-  RichfieldCareerAiSheet({super.key});
+  RichfieldCareerAiSheet({super.key, this.profile});
+
+  /// The caller's own profile row, so the completeness score below is
+  /// computed from real data instead of the hardcoded 72% this replaced.
+  /// Null is handled (shows 0% / everything outstanding) rather than
+  /// assumed non-null, since PortfolioScreen can open this sheet before
+  /// its own profile fetch has resolved.
+  final Map<String, dynamic>? profile;
+
+  /// Which of a handful of profile fields are actually filled in. This is
+  /// the entire "AI" behind the old 'GOOD START • TOP 28%' badge — there
+  /// never was a model or a peer comparison behind that number, and with
+  /// only a handful of real profiles in the database a genuine percentile
+  /// would be meaningless anyway. Deliberately checks profiles columns
+  /// only, not the separate skills/education/work_experience tables —
+  /// this is a quick client-side signal, not a full audit.
+  List<bool> get _completenessChecks {
+    bool has(String key) {
+      final v = profile?[key];
+      return v != null && v.toString().trim().isNotEmpty;
+    }
+
+    return [
+      has('professional_headline'),
+      has('bio'),
+      has('avatar_path'),
+      has('career_interests'),
+      has('github_url') || has('linkedin_url') || has('website_url'),
+    ];
+  }
+
+  double get _completeness {
+    final checks = _completenessChecks;
+    final filled = checks.where((c) => c).length;
+    return checks.isEmpty ? 0 : filled / checks.length;
+  }
+
+  String get _completenessLabel {
+    final pct = (_completeness * 100).round();
+    if (pct >= 80) return 'STRONG PROFILE';
+    if (pct >= 50) return 'GOOD START';
+    return 'JUST GETTING STARTED';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4847,10 +5030,12 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                           children: [
                             Icon(Icons.bolt, color: AppColors.tertiary, size: 16),
                             SizedBox(width: 4),
-                            Text('72% Profile Strength', style: AppText.labelLg()),
+                            Text('${(_completeness * 100).round()}% Profile Strength', style: AppText.labelLg()),
                           ],
                         ),
-                        Text('GOOD START • TOP 28%',
+                        // No percentile claim anymore — see _completenessLabel's
+                        // doc comment for why 'TOP 28%' never meant anything.
+                        Text(_completenessLabel,
                             style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
                       ],
                     ),
@@ -4858,17 +5043,22 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(AppRadius.full),
                       child: LinearProgressIndicator(
-                        value: 0.72,
+                        value: _completeness,
                         minHeight: 8,
                         backgroundColor: AppColors.surfaceContainerHigh,
                         color: AppColors.primary,
                       ),
                     ),
                     SizedBox(height: AppSpace.sm),
-                    Text(
-                      'Complete 2 more AI recommendations to unlock Verified Top Scholar status.',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-                    ),
+                    Builder(builder: (_) {
+                      final missing = _completenessChecks.where((c) => !c).length;
+                      return Text(
+                        missing == 0
+                            ? 'Your profile covers every section we check.'
+                            : 'Complete $missing more profile section${missing == 1 ? '' : 's'} to strengthen your visibility.',
+                        style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                      );
+                    }),
                   ],
                 ),
               ),
@@ -4907,8 +5097,8 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _queryChip('What do tech recruiters look for?'),
-                  _queryChip('How do I improve my profile?'),
+                  _queryChip(context, 'What do tech recruiters look for?'),
+                  _queryChip(context, 'How do I improve my profile?'),
                 ],
               ),
               SizedBox(height: AppSpace.base),
@@ -5008,21 +5198,34 @@ class RichfieldCareerAiSheet extends StatelessWidget {
     );
   }
 
-  Widget _queryChip(String text) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(AppRadius.full),
-        border: Border.all(color: AppColors.outlineVariant),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
-          SizedBox(width: 6),
-          Text(text, style: AppText.bodySm()),
-        ],
+  // Was a plain Container — no GestureDetector/InkWell/onTap anywhere,
+  // not even a fake handler. Tapping it did exactly nothing. Now opens
+  // the same AI Profile Builder screen with the question pre-filled and
+  // sent immediately, so 'instant' in 'INSTANT AI QUERIES' is true.
+  Widget _queryChip(BuildContext context, String text) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.full),
+      onTap: () {
+        Navigator.pop(context);
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => AiProfileInputScreen(initialMessage: text, autoSubmit: true),
+        ));
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(AppRadius.full),
+          border: Border.all(color: AppColors.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
+            SizedBox(width: 6),
+            Text(text, style: AppText.bodySm()),
+          ],
+        ),
       ),
     );
   }
