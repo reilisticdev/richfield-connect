@@ -26,6 +26,8 @@
 // the widget tree allows it.
 // =====================================================================
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -67,6 +69,19 @@ void main() async {
     anonKey: SupabaseConfig.anonKey,
   );
   final authService = AuthService(Supabase.instance.client);
+
+  // Writes the device's FCM token onto whichever profile is signed in.
+  // Has to happen here, not inside PushNotificationService.initialize()
+  // above — that runs before Supabase.initialize() and before any user is
+  // signed in, so there's no profile row yet to write to. Covers both a
+  // fresh sign-in (the stream fires) and reopening the app with an
+  // existing session (the explicit call right after covers the case
+  // where the stream's initial emission is missed by subscribing late).
+  Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+    PushNotificationService.syncTokenIfSignedIn();
+  });
+  unawaited(PushNotificationService.syncTokenIfSignedIn());
+
   runApp(RichfieldConnectApp(authService: authService));
 }
 
