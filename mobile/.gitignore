@@ -46,3 +46,14 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Firebase config — contains a real API key + project identifiers.
+# GitHub secret scanning flagged this after it was committed directly to
+# main (d462fef, 2026-09-10) bypassing this file. Removed from tracking in
+# the same change that adds this line (git rm --cached) — the local copy
+# stays on disk, it just stops going into commits from here on.
+# NOTE: git rm --cached does not scrub the file from history — it's still
+# readable in d462fef on origin/main. Untracking it only stops the bleeding
+# going forward; if it needs to be gone from history too, that's a
+# separate, disruptive history-rewrite operation, not done here.
+android/app/google-services.json
