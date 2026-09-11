@@ -17,6 +17,12 @@ function Events() {
 
   const [editingEventId, setEditingEventId] = useState(null);
 
+  // Delete asks for a second click on the row instead of window.confirm():
+  // embedded browsers such as VS Code's can block native dialogs, and a
+  // blocked confirm() returns false, so Delete would silently do nothing.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
   const fetchEvents = async () => {
     setLoadingEvents(true);
 
@@ -141,6 +147,38 @@ function Events() {
         event.id === id ? { ...event, status: "published" } : event
       )
     );
+  };
+
+  const deleteEvent = async (event) => {
+    setError(null);
+    setDeletingId(event.id);
+
+    // RLS turns a disallowed delete into zero rows rather than an error, so
+    // ask for the deleted row back and treat an empty result as a failure.
+    const { data, error } = await supabase
+      .from("events")
+      .delete()
+      .eq("id", event.id)
+      .select("id");
+
+    setDeletingId(null);
+    setConfirmingDeleteId(null);
+
+    if (error || !data?.length) {
+      console.error("Error deleting event:", error);
+      setError("Could not delete event.");
+      return;
+    }
+
+    if (editingEventId === event.id) {
+      setEditingEventId(null);
+      setTitle("");
+      setDate("");
+      setTime("");
+      setLocation("");
+    }
+
+    setEvents((current) => current.filter((item) => item.id !== event.id));
   };
 
   return (
@@ -326,6 +364,32 @@ function Events() {
                        >
                          Publish
                        </button>
+                    )}
+
+                    {confirmingDeleteId === event.id ? (
+                      <>
+                        <button
+                          className="reject-button"
+                          disabled={deletingId === event.id}
+                          onClick={() => deleteEvent(event)}
+                        >
+                          {deletingId === event.id ? "Deleting..." : "Confirm delete"}
+                        </button>
+                        <button
+                          className="cancel-button"
+                          disabled={deletingId === event.id}
+                          onClick={() => setConfirmingDeleteId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="reject-button"
+                        onClick={() => setConfirmingDeleteId(event.id)}
+                      >
+                        Delete
+                      </button>
                     )}
                  </div>
                 </div>
