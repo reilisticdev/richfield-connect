@@ -431,17 +431,36 @@
 }
 .action-buttons {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .approve-button,
-.reject-button {
+.reject-button,
+.cancel-button {
   border: none;
   padding: 8px 12px;
   border-radius: 7px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* Used by Events' "Cancel Edit" and delete confirmation; it had no rule
+   at all, so it rendered as an unstyled browser button. */
+.cancel-button {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.cancel-button:hover {
+  background: #e2e8f0;
+}
+
+.cancel-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .approve-button {
