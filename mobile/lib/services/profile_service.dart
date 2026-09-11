@@ -79,6 +79,34 @@ class ProfileService {
         .single();
   }
 
+  /// Adds the skills the user doesn't already list and returns the names
+  /// actually inserted. Matching is case-insensitive: the CV parser and the
+  /// skill suggester produce "Sql" as readily as "SQL", and `skills` has no
+  /// unique constraint on (profile_id, skill_name), so without this an
+  /// import run twice would list every skill twice.
+  Future<List<String>> addSkills({
+    required String userId,
+    required Iterable<String> names,
+  }) async {
+    final existing = await _client.from('skills').select('skill_name').eq('profile_id', userId);
+    final have = List<Map<String, dynamic>>.from(existing as List)
+        .map((r) => ((r['skill_name'] as String?) ?? '').trim().toLowerCase())
+        .toSet();
+
+    final toAdd = <String>[];
+    for (final raw in names) {
+      final name = raw.trim();
+      if (name.isEmpty || !have.add(name.toLowerCase())) continue;
+      toAdd.add(name);
+    }
+    if (toAdd.isEmpty) return toAdd;
+
+    await _client
+        .from('skills')
+        .insert([for (final name in toAdd) {'profile_id': userId, 'skill_name': name}]);
+    return toAdd;
+  }
+
   /// Users type "github.com/me" far more often than they type a full URL.
   /// Storing it bare means url_launcher gets a relative string and silently
   /// refuses to open it, which reads as another dead button.

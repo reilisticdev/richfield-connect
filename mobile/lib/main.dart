@@ -56,7 +56,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'services/push_notification_service.dart';
 import 'config/ai_config.dart';
-import 'services/ai_service.dart';
+import 'screens/ai_assistant_screen.dart';
+import 'screens/cv_import_screen.dart';
+import 'services/profile_context_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -74,6 +76,7 @@ void main() async {
   unawaited(PushNotificationService.initialize());
 
   await ThemeController.loadSaved();
+  await AiConfig.load();
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
@@ -1197,6 +1200,16 @@ void _openAccountMenu(BuildContext context, AuthService authService) {
             },
           ),
           ListTile(
+            leading: Icon(Icons.auto_awesome_outlined),
+            title: Text('Career AI assistant'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => AiAssistantScreen()),
+              );
+            },
+          ),
+          ListTile(
             leading: Icon(Icons.logout, color: AppColors.error),
             title: Text('Log Out', style: TextStyle(color: AppColors.error)),
             onTap: () async {
@@ -1212,8 +1225,8 @@ void _openAccountMenu(BuildContext context, AuthService authService) {
   );
 }
 
-void _startOnboardingTour(BuildContext context) {
-  Navigator.of(context).push(
+Future<void> _startOnboardingTour(BuildContext context) {
+  return Navigator.of(context).push(
     PageRouteBuilder(
       opaque: false,
       barrierDismissible: true,
@@ -2613,7 +2626,40 @@ class _RootShellState extends State<RootShell> {
     // actual workflow tonight) doesn't re-trigger it on every restart.
     await prefs.setBool(_tourSeenKey, true);
     if (!mounted) return;
-    _startOnboardingTour(context);
+    await _startOnboardingTour(context);
+
+    // Rubric 6.1: the tour explains the app, then Career AI walks a new
+    // student or alumnus through actually filling in their profile, one
+    // missing section at a time. Offered rather than forced — "Later" leaves
+    // it on the Portfolio sparkle button and in the account menu.
+    final hasCareerProfile =
+        widget.role == RichfieldRole.student || widget.role == RichfieldRole.alumni;
+    if (!hasCareerProfile || !mounted) return;
+    final start = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.auto_awesome, color: AppColors.primary),
+        title: Text('Set up your profile with AI?'),
+        content: Text(
+          'Richfield Career AI looks at what your profile is missing and walks you through it step by step.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text('Start'),
+          ),
+        ],
+      ),
+    );
+    if (start == true && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => AiAssistantScreen(guided: true)),
+      );
+    }
   }
 
   List<Widget> get _screens => [
@@ -3512,158 +3558,6 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   }
 }
 
-class AiProfileInputScreen extends StatefulWidget {
-  /// initialMessage pre-fills the text box, from a query chip in
-  /// RichfieldCareerAiSheet. autoSubmit sends it immediately instead of
-  /// waiting for the user to tap Generate, so a chip tap feels like the
-  /// instant answer its label promises rather than a second manual step.
-  AiProfileInputScreen({super.key, this.initialMessage, this.autoSubmit = false});
-
-  final String? initialMessage;
-  final bool autoSubmit;
-
-  @override
-  State<AiProfileInputScreen> createState() => _AiProfileInputScreenState();
-}
-
-class _AiProfileInputScreenState extends State<AiProfileInputScreen> {
-  late final _messageController = TextEditingController(text: widget.initialMessage ?? '');
-  final _authService = AuthService(Supabase.instance.client);
-  final _profileService = ProfileService(Supabase.instance.client);
-  final _aiService = AiService(AiConfig.baseUrl);
-
-  bool _loading = false;
-  String? _error;
-  String? _reply;
-
-  @override
-  void initState() {
-    super.initState();
-    // Same reasoning as the tour auto-trigger in RootShell: don't touch
-    // BuildContext/network before the first frame has actually built.
-    if (widget.autoSubmit && (widget.initialMessage?.trim().isNotEmpty ?? false)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _generate());
-    }
-  }
-
-  @override
-  void dispose() {
-    _messageController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _generate() async {
-    final message = _messageController.text.trim();
-    if (message.isEmpty) {
-      setState(() => _error = 'Write something first — what are you trying to figure out?');
-      return;
-    }
-
-    final userId = _authService.currentUser?.id;
-    if (userId == null) {
-      setState(() => _error = 'Your session has expired. Sign in again.');
-      return;
-    }
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      // AiService is stateless toward Supabase by design (see its header
-      // comment) — the client fetches the profile and hands it over,
-      // rather than the Flask service reaching into the database itself.
-      final profile = await _profileService.fetchProfile(userId);
-      final reply = await _aiService.chat(message: message, profile: profile);
-      if (!mounted) return;
-      setState(() {
-        _reply = reply;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = e is AiServiceException ? e.message : AuthErrorMapper.fromAny(e);
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('AI Profile Suggestions')),
-      body: ListView(padding: EdgeInsets.all(AppSpace.base), children: [
-        Text('Tell us about your goals', style: AppText.headlineMd()),
-        SizedBox(height: AppSpace.xs),
-        Text(
-          'Add free-text experience and the assistant will suggest skills, projects, and profile sections.',
-          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
-        ),
-        SizedBox(height: AppSpace.base),
-        TextField(
-          controller: _messageController,
-          minLines: 8,
-          maxLines: 12,
-          decoration: InputDecoration(
-            hintText: 'Example: I built a Flutter app that...',
-            filled: true,
-            fillColor: AppColors.surfaceContainerLow,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
-          ),
-        ),
-        SizedBox(height: AppSpace.md),
-        ElevatedButton.icon(
-          onPressed: _loading ? null : _generate,
-          icon: _loading
-              ? SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary),
-                )
-              : Icon(Icons.auto_awesome),
-          label: Text(_loading ? 'Thinking...' : 'Generate Suggestions'),
-        ),
-        if (_error != null) ...[
-          SizedBox(height: AppSpace.sm),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.error_outline, size: 16, color: AppColors.error),
-              SizedBox(width: 6),
-              Expanded(child: Text(_error!, style: AppText.bodySm(color: AppColors.error))),
-            ],
-          ),
-        ],
-        if (_reply != null) ...[
-          SizedBox(height: AppSpace.base),
-          RoundedCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.smart_toy_outlined, size: 16, color: AppColors.primary),
-                    SizedBox(width: 6),
-                    Text('Richfield Career AI', style: AppText.labelLg()),
-                  ],
-                ),
-                SizedBox(height: AppSpace.sm),
-                // Real Gemini output — free-form text, not the hardcoded
-                // three-line list this replaced. Showing exactly what the
-                // model said is more honest than reformatting it to look
-                // more structured than it actually is.
-                Text(_reply!, style: AppText.bodyMd()),
-              ],
-            ),
-          ),
-        ],
-      ]),
-    );
-  }
-}
-
 class StudentAnalyticsScreen extends StatelessWidget {
   StudentAnalyticsScreen({super.key});
 
@@ -4401,13 +4295,33 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     );
   }
 
-  void _openCareerAiSheet(BuildContext context) {
-    showModalBottomSheet(
+  /// The sheet doesn't navigate by itself — it pops with the screen the user
+  /// picked and this pushes it, so Portfolio knows when they come back from
+  /// the assistant or a CV import and can repaint from the database instead
+  /// of showing the pre-import headline until the next restart.
+  Future<void> _openCareerAiSheet(BuildContext context) async {
+    final next = await showModalBottomSheet<Widget>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => RichfieldCareerAiSheet(profile: _profile),
+      builder: (_) => RichfieldCareerAiSheet(),
     );
+    if (next == null || !mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => next));
+    await _reloadProfile();
+  }
+
+  /// Uncached on purpose: AuthService.fetchOwnProfile() holds a 30-second
+  /// cache for the router, which would hand back the row from before the edit.
+  Future<void> _reloadProfile() async {
+    final userId = widget.authService.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final fresh = await _profileService.fetchProfile(userId);
+      if (mounted) setState(() => _profile = fresh);
+    } catch (_) {
+      // Keep what's on screen; a failed background refresh isn't worth an error.
+    }
   }
 
   Widget _profileHeaderCard() {
@@ -4914,48 +4828,50 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 // SECTION 12 — RICHFIELD CAREER AI SHEET (profile assistant)
 // =====================================================================
 
-class RichfieldCareerAiSheet extends StatelessWidget {
-  RichfieldCareerAiSheet({super.key, this.profile});
+/// Entry point to Richfield Career AI from the Portfolio sparkle button.
+///
+/// Everything on this sheet used to be hardcoded: a 'PRO' badge, a
+/// '+65% REACH' stat with no source, a 'GitHub Sync Ready' feature that did
+/// not exist, and an 'NLP CV Parser' card describing an upload flow with no
+/// tap target. Profile strength and next steps now come from the user's real
+/// rows (ProfileContext), and every card opens something that works. It pops
+/// with the screen to open — see PortfolioScreen._openCareerAiSheet.
+class RichfieldCareerAiSheet extends StatefulWidget {
+  RichfieldCareerAiSheet({super.key});
 
-  /// The caller's own profile row, so the completeness score below is
-  /// computed from real data instead of the hardcoded 72% this replaced.
-  /// Null is handled (shows 0% / everything outstanding) rather than
-  /// assumed non-null, since PortfolioScreen can open this sheet before
-  /// its own profile fetch has resolved.
-  final Map<String, dynamic>? profile;
+  @override
+  State<RichfieldCareerAiSheet> createState() => _RichfieldCareerAiSheetState();
+}
 
-  /// Which of a handful of profile fields are actually filled in. This is
-  /// the entire "AI" behind the old 'GOOD START • TOP 28%' badge — there
-  /// never was a model or a peer comparison behind that number, and with
-  /// only a handful of real profiles in the database a genuine percentile
-  /// would be meaningless anyway. Deliberately checks profiles columns
-  /// only, not the separate skills/education/work_experience tables —
-  /// this is a quick client-side signal, not a full audit.
-  List<bool> get _completenessChecks {
-    bool has(String key) {
-      final v = profile?[key];
-      return v != null && v.toString().trim().isNotEmpty;
+class _RichfieldCareerAiSheetState extends State<RichfieldCareerAiSheet> {
+  final _contextService = ProfileContextService(Supabase.instance.client);
+  ProfileContext? _ctx;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final ctx = await _contextService.load(userId);
+      if (mounted) setState(() => _ctx = ctx);
+    } catch (e) {
+      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
     }
-
-    return [
-      has('professional_headline'),
-      has('bio'),
-      has('avatar_path'),
-      has('career_interests'),
-      has('github_url') || has('linkedin_url') || has('website_url'),
-    ];
   }
 
-  double get _completeness {
-    final checks = _completenessChecks;
-    final filled = checks.where((c) => c).length;
-    return checks.isEmpty ? 0 : filled / checks.length;
-  }
+  void _open(Widget screen) => Navigator.pop(context, screen);
 
-  String get _completenessLabel {
-    final pct = (_completeness * 100).round();
-    if (pct >= 80) return 'STRONG PROFILE';
-    if (pct >= 50) return 'GOOD START';
+  String _strengthLabel(double completeness) {
+    final pct = (completeness * 100).round();
+    if (pct >= 100) return 'COMPLETE';
+    if (pct >= 70) return 'STRONG PROFILE';
+    if (pct >= 40) return 'GOOD START';
     return 'JUST GETTING STARTED';
   }
 
@@ -4967,6 +4883,8 @@ class RichfieldCareerAiSheet extends StatelessWidget {
       maxChildSize: 0.92,
       expand: false,
       builder: (context, scrollController) {
+        final ctx = _ctx;
+        final next = ctx?.nextStep;
         return Container(
           decoration: BoxDecoration(
             color: AppColors.surfaceContainerLowest,
@@ -4995,25 +4913,15 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                       color: AppColors.primary,
                       borderRadius: BorderRadius.circular(AppRadius.md),
                     ),
-                    child: Icon(Icons.smart_toy_outlined, color: Colors.white),
+                    child: Icon(Icons.smart_toy_outlined, color: AppColors.onPrimary),
                   ),
                   SizedBox(width: AppSpace.sm),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Text('Richfield Career AI', style: AppText.labelLg()),
-                            SizedBox(width: 6),
-                            Pill(
-                              text: 'PRO',
-                              background: AppColors.tertiaryContainer,
-                              foreground: AppColors.onTertiaryContainer,
-                            ),
-                          ],
-                        ),
-                        Text('Real-time Recruiter Benchmark Assistant',
+                        Text('Richfield Career AI', style: AppText.labelLg()),
+                        Text('Profile assistant powered by Google Gemini',
                             style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                       ],
                     ),
@@ -5025,123 +4933,82 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                 ],
               ),
               SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.surfaceContainerLow,
-                border: Border.all(color: Colors.transparent),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.bolt, color: AppColors.tertiary, size: 16),
-                            SizedBox(width: 4),
-                            Text('${(_completeness * 100).round()}% Profile Strength', style: AppText.labelLg()),
-                          ],
+              if (ctx == null && _error == null)
+                Padding(
+                  padding: EdgeInsets.all(AppSpace.xl),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              if (_error != null) Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+              if (ctx != null) ...[
+                _strengthCard(ctx),
+                SizedBox(height: AppSpace.md),
+                if (next != null) ...[
+                  Text('NEXT STEPS', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+                  SizedBox(height: 6),
+                  ...ctx.steps.where((s) => !s.done).take(3).map(
+                        (step) => Padding(
+                          padding: EdgeInsets.only(bottom: AppSpace.sm),
+                          child: _actionCard(
+                            icon: Icons.flag_outlined,
+                            iconBg: AppColors.tertiaryContainer,
+                            title: step.label,
+                            body: step.why,
+                            cta: 'Ask AI',
+                            onTap: () => _open(AiAssistantScreen(initialMessage: step.prompt)),
+                          ),
                         ),
-                        // No percentile claim anymore — see _completenessLabel's
-                        // doc comment for why 'TOP 28%' never meant anything.
-                        Text(_completenessLabel,
-                            style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-                      ],
-                    ),
-                    SizedBox(height: AppSpace.sm),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(AppRadius.full),
-                      child: LinearProgressIndicator(
-                        value: _completeness,
-                        minHeight: 8,
-                        backgroundColor: AppColors.surfaceContainerHigh,
-                        color: AppColors.primary,
                       ),
-                    ),
-                    SizedBox(height: AppSpace.sm),
-                    Builder(builder: (_) {
-                      final missing = _completenessChecks.where((c) => !c).length;
-                      return Text(
-                        missing == 0
-                            ? 'Your profile covers every section we check.'
-                            : 'Complete $missing more profile section${missing == 1 ? '' : 's'} to strengthen your visibility.',
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-                      );
-                    }),
+                ],
+                _actionCard(
+                  icon: Icons.description_outlined,
+                  iconBg: AppColors.secondaryContainer,
+                  title: 'Import from your CV',
+                  body: 'Paste your CV or describe your experience. AI extracts a headline, skills '
+                      'and education for you to review before anything is saved.',
+                  cta: 'Import',
+                  onTap: () => _open(CvImportScreen()),
+                ),
+                SizedBox(height: AppSpace.base),
+                Text('ASK THE ASSISTANT', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+                SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _queryChip('What do tech recruiters look for?'),
+                    _queryChip('How do I improve my profile?'),
+                    _queryChip('Which roles fit my skills?'),
                   ],
                 ),
-              ),
-              SizedBox(height: AppSpace.md),
-              _suggestionCard(
-                icon: Icons.lightbulb_outline,
-                iconBg: AppColors.tertiaryContainer,
-                title: 'Quick Win',
-                tag: '+65% REACH',
-                tagColor: AppColors.successGreen,
-                body: 'Adding 3 more technical skills increases recruiter discoverability by 65% for enterprise software internships.',
-                chips: ['+ Docker', '+ TypeScript', '+ PostgreSQL'],
-              ),
-              SizedBox(height: AppSpace.sm),
-              _suggestionCard(
-                icon: Icons.code,
-                iconBg: AppColors.secondaryContainer,
-                title: 'GitHub Sync Ready',
-                tag: 'AUTOMATED',
-                tagColor: AppColors.secondary,
-                body: 'Sync your top 2 pinned repositories to automatically generate verified project showcase cards with test coverage scores.',
-              ),
-              SizedBox(height: AppSpace.sm),
-              _suggestionCard(
-                icon: Icons.description_outlined,
-                iconBg: AppColors.onPrimaryContainer,
-                title: 'NLP CV Parser',
-                tag: 'FAST-TRACK',
-                tagColor: AppColors.primary,
-                body: 'Upload your resume PDF and let our AI auto-fill your coursework, graduation thesis, and previous internships in seconds.',
-              ),
-              SizedBox(height: AppSpace.base),
-              Text('INSTANT AI QUERIES', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-              SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _queryChip(context, 'What do tech recruiters look for?'),
-                  _queryChip(context, 'How do I improve my profile?'),
-                ],
-              ),
-              SizedBox(height: AppSpace.base),
-              OutlinedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => AiProfileInputScreen()));
-                },
-                icon: Icon(Icons.edit_note_outlined),
-                label: Text('Open AI Profile Builder'),
-              ),
-              SizedBox(height: AppSpace.sm),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 14),
-                        side: BorderSide(color: AppColors.outlineVariant),
+                SizedBox(height: AppSpace.base),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _open(AiAssistantScreen()),
+                        style: OutlinedButton.styleFrom(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          side: BorderSide(color: AppColors.outlineVariant),
+                        ),
+                        child: Text('Open chat', style: AppText.labelLg()),
                       ),
-                      child: Text('Dismiss', style: AppText.labelLg()),
                     ),
-                  ),
-                  SizedBox(width: AppSpace.sm),
-                  Expanded(
-                    flex: 2,
-                    child: PrimaryButton(
-                      label: 'Apply AI Suggestions',
-                      icon: Icons.auto_awesome,
-                      onPressed: () => Navigator.pop(context),
+                    SizedBox(width: AppSpace.sm),
+                    Expanded(
+                      flex: 2,
+                      child: PrimaryButton(
+                        label: next == null ? 'Review my profile' : 'Start guided setup',
+                        icon: Icons.auto_awesome,
+                        onPressed: () => _open(next == null
+                            ? AiAssistantScreen(
+                                initialMessage:
+                                    'Review my profile and tell me what would make it stand out more.')
+                            : AiAssistantScreen(guided: true)),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ],
           ),
         );
@@ -5149,92 +5016,96 @@ class RichfieldCareerAiSheet extends StatelessWidget {
     );
   }
 
-  Widget _suggestionCard({
-    required IconData icon,
-    required Color iconBg,
-    required String title,
-    required String tag,
-    required Color tagColor,
-    required String body,
-    List<String>? chips,
-  }) {
+  Widget _strengthCard(ProfileContext ctx) {
+    final pct = (ctx.completeness * 100).round();
+    final missing = ctx.steps.length - ctx.doneCount;
     return RoundedCard(
-      child: Row(
+      color: AppColors.surfaceContainerLow,
+      border: Border.all(color: Colors.transparent),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: iconBg.withOpacity(0.4),
-              borderRadius: BorderRadius.circular(AppRadius.md),
-            ),
-            child: Icon(icon, size: 18, color: AppColors.onSurface),
+          Row(
+            children: [
+              Icon(Icons.bolt, color: AppColors.tertiary, size: 16),
+              SizedBox(width: 4),
+              Text('$pct% Profile Strength', style: AppText.labelLg()),
+              Spacer(),
+              Text(_strengthLabel(ctx.completeness),
+                  style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+            ],
           ),
-          SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(title, style: AppText.labelLg()),
-                    Text(tag, style: AppText.labelBadge(color: tagColor)),
-                  ],
-                ),
-                SizedBox(height: 4),
-                Text(body, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                if (chips != null) ...[
-                  SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: chips
-                        .map((c) => Pill(
-                              text: c,
-                              background: AppColors.surfaceContainerHigh,
-                              foreground: AppColors.onSurfaceVariant,
-                            ))
-                        .toList(),
-                  ),
-                ],
-              ],
+          SizedBox(height: AppSpace.sm),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.full),
+            child: LinearProgressIndicator(
+              value: ctx.completeness,
+              minHeight: 8,
+              backgroundColor: AppColors.surfaceContainerHigh,
+              color: AppColors.primary,
             ),
+          ),
+          SizedBox(height: AppSpace.sm),
+          Text(
+            missing == 0
+                ? 'Every setup step is done — nice work.'
+                : '${ctx.doneCount} of ${ctx.steps.length} setup steps done, $missing to go.',
+            style: AppText.bodySm(color: AppColors.onSurfaceVariant),
           ),
         ],
       ),
     );
   }
 
-  // Was a plain Container — no GestureDetector/InkWell/onTap anywhere,
-  // not even a fake handler. Tapping it did exactly nothing. Now opens
-  // the same AI Profile Builder screen with the question pre-filled and
-  // sent immediately, so 'instant' in 'INSTANT AI QUERIES' is true.
-  Widget _queryChip(BuildContext context, String text) {
+  Widget _actionCard({
+    required IconData icon,
+    required Color iconBg,
+    required String title,
+    required String body,
+    required String cta,
+    required VoidCallback onTap,
+  }) {
     return InkWell(
-      borderRadius: BorderRadius.circular(AppRadius.full),
-      onTap: () {
-        Navigator.pop(context);
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => AiProfileInputScreen(initialMessage: text, autoSubmit: true),
-        ));
-      },
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(AppRadius.full),
-          border: Border.all(color: AppColors.outlineVariant),
-        ),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.xl),
+      child: RoundedCard(
         child: Row(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
-            SizedBox(width: 6),
-            Text(text, style: AppText.bodySm()),
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: iconBg.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              child: Icon(icon, size: 18, color: AppColors.onSurface),
+            ),
+            SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: AppText.labelLg()),
+                  SizedBox(height: 2),
+                  Text(body, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                ],
+              ),
+            ),
+            SizedBox(width: AppSpace.sm),
+            Text(cta, style: AppText.labelMd(color: AppColors.primary)),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _queryChip(String text) {
+    return ActionChip(
+      avatar: Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
+      label: Text(text, style: AppText.bodySm()),
+      onPressed: () => _open(AiAssistantScreen(initialMessage: text)),
+      backgroundColor: AppColors.surfaceContainerLow,
+      side: BorderSide(color: AppColors.outlineVariant),
     );
   }
 }
