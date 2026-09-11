@@ -1,6 +1,8 @@
 // mobile/lib/services/feed_service.dart
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'media_service.dart';
+
 class FeedService {
   FeedService(this._client);
   final SupabaseClient _client;
@@ -58,18 +60,26 @@ class FeedService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  /// The next published event, for the Feed banner. events' SELECT policy
-  /// already hides unpublished rows from non-admins; the status filter is
-  /// explicit so an administrator's feed doesn't advertise a draft either.
-  Future<Map<String, dynamic>?> fetchNextEvent() async {
-    return await _client
+  /// Published events that haven't started, soonest first: the Events
+  /// screen lists them and the Feed banner shows the first. events' SELECT
+  /// policy already hides unpublished rows from non-admins; the status
+  /// filter is explicit so an administrator doesn't see drafts either.
+  ///
+  /// `ascending: true` is load-bearing. postgrest-dart's order() defaults to
+  /// DESCENDING, so the old banner query (.order('event_date').limit(1))
+  /// sent `order=event_date.desc` and showed the event furthest in the
+  /// future. That is why the Feed advertised Alumni Success Stories (9 Oct)
+  /// while the Graduate Career Fair (22 Sep) was sooner (API logs,
+  /// 2026-09-11).
+  Future<List<Map<String, dynamic>>> fetchUpcomingEvents({int limit = 50}) async {
+    final rows = await _client
         .from('events')
         .select('id, title, description, event_date, location')
         .eq('status', 'published')
         .gte('event_date', DateTime.now().toUtc().toIso8601String())
-        .order('event_date')
-        .limit(1)
-        .maybeSingle();
+        .order('event_date', ascending: true)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
   }
 
   /// The set of post ids the signed-in user has reposted, so the feed can
@@ -175,13 +185,15 @@ class FeedService {
     return true;
   }
 
-  /// Oldest first, so a thread reads top to bottom.
+  /// Oldest first, so a thread reads top to bottom and a new comment (the
+  /// sheet appends it) lands at the end. Without `ascending: true` this was
+  /// newest first: postgrest-dart's order() defaults to descending.
   Future<List<Map<String, dynamic>>> fetchComments(String postId) async {
     final rows = await _client
         .from('comments')
         .select(commentFields)
         .eq('post_id', postId)
-        .order('created_at');
+        .order('created_at', ascending: true);
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
@@ -204,6 +216,38 @@ class FeedService {
     final rows = await _client.from('comments').delete().eq('id', commentId).select('id');
     if ((rows as List).isEmpty) {
       throw const PostgrestException(message: 'That comment could not be deleted.');
+    }
+  }
+
+  /// Deletes a post. RLS ("Author manages own posts") limits this to the
+  /// author, plus administrators; its comments, reactions and reposts go
+  /// with it through ON DELETE CASCADE. Zero rows back means RLS refused.
+  ///
+  /// The deleted row's media paths come back from the same request, and the
+  /// files are then removed on a best-effort basis: the post is already gone
+  /// and nothing links to the file any more, so a storage error here must
+  /// not be reported as "couldn't delete your post".
+  Future<void> deletePost(String postId) async {
+    final rows = await _client
+        .from('posts')
+        .delete()
+        .eq('id', postId)
+        .select('image_path, video_path, thumbnail_path');
+    final deleted = List<Map<String, dynamic>>.from(rows as List);
+    if (deleted.isEmpty) {
+      throw const PostgrestException(message: 'That post could not be deleted.');
+    }
+
+    final row = deleted.first;
+    final paths = [
+      for (final key in const ['image_path', 'video_path', 'thumbnail_path'])
+        if (row[key] is String && (row[key] as String).isNotEmpty) row[key] as String,
+    ];
+    if (paths.isEmpty) return;
+    try {
+      await _client.storage.from(MediaService.postMediaBucket).remove(paths);
+    } catch (_) {
+      // Orphaned file only; see above.
     }
   }
 

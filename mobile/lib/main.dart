@@ -59,6 +59,7 @@ import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
 import 'screens/career_pathways_screen.dart';
+import 'screens/events_screen.dart';
 import 'services/profile_context_service.dart';
 import 'screens/messages_screen.dart';
 import 'screens/network_screen.dart';
@@ -947,6 +948,16 @@ void _openAccountMenu(BuildContext context, AuthService authService) {
               Navigator.pop(context);
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => CareerPathwaysScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.event_outlined),
+            title: Text('Events'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => EventsScreen()),
               );
             },
           ),
@@ -2700,8 +2711,9 @@ class _FeedScreenState extends State<FeedScreen> {
   /// filter anything, and the third was 'Graduate Jobs' in a list of posts.
   static const _filters = ['All updates', 'Career reels', 'Photos'];
 
-  /// Next published event for the banner; null hides it.
-  Map<String, dynamic>? _nextEvent;
+  /// Upcoming published events, soonest first. The banner shows the first
+  /// and links to the rest; an empty list hides it.
+  List<Map<String, dynamic>> _upcomingEvents = [];
   bool _eventDismissed = false;
 
   final _authService = AuthService(Supabase.instance.client);
@@ -2723,17 +2735,17 @@ class _FeedScreenState extends State<FeedScreen> {
   void initState() {
     super.initState();
     _loadPosts();
-    _loadNextEvent();
+    _loadEvents();
   }
 
   /// The banner is optional: if this fails the feed shows no banner rather
   /// than an error above posts that loaded fine.
-  Future<void> _loadNextEvent() async {
+  Future<void> _loadEvents() async {
     try {
-      final event = await _feedService.fetchNextEvent();
-      if (mounted) setState(() => _nextEvent = event);
+      final events = await _feedService.fetchUpcomingEvents();
+      if (mounted) setState(() => _upcomingEvents = events);
     } catch (_) {
-      if (mounted) setState(() => _nextEvent = null);
+      if (mounted) setState(() => _upcomingEvents = []);
     }
   }
 
@@ -2893,12 +2905,18 @@ class _FeedScreenState extends State<FeedScreen> {
     );
   }
 
+  Future<void> _deletePost(FeedPost post) async {
+    if (!await _confirmAndDeletePost(context, post)) return;
+    if (!mounted) return;
+    setState(() => _posts = _posts.where((p) => p.id != post.id).toList());
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         RefreshIndicator(
-          onRefresh: () => Future.wait([_loadPosts(), _loadNextEvent()]),
+          onRefresh: () => Future.wait([_loadPosts(), _loadEvents()]),
           child: ListView(
           padding: EdgeInsets.only(bottom: 90),
           children: [
@@ -2907,10 +2925,10 @@ class _FeedScreenState extends State<FeedScreen> {
               subtitle: 'RICHFIELD VERIFIED',
               onAvatarTap: () => _openAccountMenu(context, _authService),
             ),
-            if (_nextEvent != null && !_eventDismissed)
+            if (_upcomingEvents.isNotEmpty && !_eventDismissed)
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-                child: _eventBanner(_nextEvent!),
+                child: _eventBanner(_upcomingEvents.first, total: _upcomingEvents.length),
               ),
             SizedBox(height: AppSpace.base),
             Padding(
@@ -2982,6 +3000,9 @@ class _FeedScreenState extends State<FeedScreen> {
                           onReport: post.id == null || post.authorId == _authService.currentUser?.id
                               ? null
                               : () => _reportPost(post),
+                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                              ? () => _deletePost(post)
+                              : null,
                         )
                       : _VideoPostCard(
                           post: post,
@@ -2991,6 +3012,9 @@ class _FeedScreenState extends State<FeedScreen> {
                           onReport: post.id == null || post.authorId == _authService.currentUser?.id
                               ? null
                               : () => _reportPost(post),
+                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                              ? () => _deletePost(post)
+                              : null,
                         ),
                 ),
               ),
@@ -3029,11 +3053,11 @@ class _FeedScreenState extends State<FeedScreen> {
         };
       }).toList();
 
-  /// The next published row from `events`. This used to be a hardcoded
-  /// "Richfield Annual Career Fair 2025, 18 - 20 October 2025" with an RSVP
-  /// button wired to () {}, under a row of "stories" from people who don't
-  /// exist, one of them marked LIVE.
-  Widget _eventBanner(Map<String, dynamic> event) {
+  /// The soonest upcoming published event, linking to all [total] of them.
+  /// This used to be a hardcoded "Richfield Annual Career Fair 2025, 18 - 20
+  /// October 2025" with an RSVP button wired to () {}, under a row of
+  /// "stories" from people who don't exist, one of them marked LIVE.
+  Widget _eventBanner(Map<String, dynamic> event, {required int total}) {
     final date = DateTime.tryParse(event['event_date'] as String? ?? '')?.toLocal();
     final location = (event['location'] as String?)?.trim() ?? '';
     final description = (event['description'] as String?)?.trim() ?? '';
@@ -3083,6 +3107,23 @@ class _FeedScreenState extends State<FeedScreen> {
               ],
             ),
           ],
+          SizedBox(height: AppSpace.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => EventsScreen()),
+              ),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+              ),
+              iconAlignment: IconAlignment.end,
+              icon: Icon(Icons.arrow_forward, size: 16),
+              label: Text(total > 1 ? 'See all $total upcoming events' : 'See all events'),
+            ),
+          ),
         ],
       ),
     );
@@ -3104,7 +3145,8 @@ class _TextPostCard extends StatelessWidget {
   final VoidCallback? onReact;
   final VoidCallback? onComment;
   final VoidCallback? onReport;
-  _TextPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport});
+  final VoidCallback? onDelete;
+  _TextPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -3112,7 +3154,7 @@ class _TextPostCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _postAuthorRow(post, onReport: onReport),
+          _postAuthorRow(post, onReport: onReport, onDelete: onDelete),
           SizedBox(height: AppSpace.sm),
           if (post.body.isNotEmpty) Text(post.body, style: AppText.bodyMd()),
           if (post.imageUrl != null) ...[
@@ -3160,7 +3202,8 @@ class _VideoPostCard extends StatelessWidget {
   final VoidCallback? onReact;
   final VoidCallback? onComment;
   final VoidCallback? onReport;
-  _VideoPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport});
+  final VoidCallback? onDelete;
+  _VideoPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -3171,7 +3214,7 @@ class _VideoPostCard extends StatelessWidget {
         children: [
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _postAuthorRow(post, onReport: onReport),
+            child: _postAuthorRow(post, onReport: onReport, onDelete: onDelete),
           ),
           if (post.body.isNotEmpty)
             Padding(
@@ -3659,7 +3702,44 @@ class _DailyBars extends StatelessWidget {
   }
 }
 
-Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport}) {
+/// Asks first, then deletes. Returns true only once the post is gone, so the
+/// caller can drop it from its list; a failure is shown here. Keshav's QA
+/// pass (2026-09-11) found the ••• menu only ever offered Report, and hid
+/// even that on your own posts, so an author had no way to remove a post.
+Future<bool> _confirmAndDeletePost(BuildContext context, FeedPost post) async {
+  final postId = post.id;
+  if (postId == null) return false;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text('Delete this post?'),
+      content: Text('It will be removed from the feed with its likes, comments and reposts. This can\'t be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          style: TextButton.styleFrom(foregroundColor: AppColors.error),
+          child: Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return false;
+
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await FeedService(Supabase.instance.client).deletePost(postId);
+    messenger.showSnackBar(SnackBar(content: Text('Post deleted.')));
+    return true;
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    return false;
+  }
+}
+
+/// [onDelete] is passed for the viewer's own posts and [onReport] for
+/// everyone else's, so the ••• menu offers whichever applies.
+Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport, VoidCallback? onDelete}) {
   return Row(
     children: [
       InitialsAvatar(initials: post.authorName.split(' ').map((e) => e[0]).take(2).join()),
@@ -3701,13 +3781,21 @@ Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport}) {
           ),
         ),
       ),
-      if (onReport != null)
+      if (onReport != null || onDelete != null)
         PopupMenuButton<String>(
           tooltip: 'More',
           icon: Icon(Icons.more_horiz, color: AppColors.onSurfaceVariant),
-          onSelected: (_) => onReport(),
+          onSelected: (value) {
+            if (value == 'delete') onDelete?.call();
+            if (value == 'report') onReport?.call();
+          },
           itemBuilder: (_) => [
-            PopupMenuItem(value: 'report', child: Text('Report post')),
+            if (onDelete != null)
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('Delete post', style: TextStyle(color: AppColors.error)),
+              ),
+            if (onReport != null) PopupMenuItem(value: 'report', child: Text('Report post')),
           ],
         ),
     ],
@@ -4349,6 +4437,13 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         _loadingActivity = false;
       });
     }
+  }
+
+  Future<void> _deletePost(_ActivityItem item) async {
+    if (!await _confirmAndDeletePost(context, item.post)) return;
+    if (!mounted) return;
+    // Your own post can also be in this list a second time, as your repost.
+    setState(() => _activity = _activity.where((a) => a.post.id != item.post.id).toList());
   }
 
   Future<void> _toggleRepost(FeedPost post) async {
@@ -5190,12 +5285,14 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                           onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
                           onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
                           onComment: item.post.id == null ? null : () => _openComments(item.post),
+                          onDelete: item.isRepost || item.post.id == null ? null : () => _deletePost(item),
                         )
                       : _VideoPostCard(
                           post: item.post,
                           onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
                           onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
                           onComment: item.post.id == null ? null : () => _openComments(item.post),
+                          onDelete: item.isRepost || item.post.id == null ? null : () => _deletePost(item),
                         ),
                 ],
               ),
