@@ -8,14 +8,17 @@
 // duplicate already-tested work; this file just calls the one that exists.
 //
 // The service is stateless toward Supabase — it doesn't fetch a caller's
-// profile itself, it expects the client to send it. So every chat() call
-// here takes the profile Map the caller already has (e.g. from
-// ProfileService.fetchProfile()) rather than a bare user id.
+// profile itself, it expects the client to send it. Callers pass
+// ProfileContext.toAssistantJson() rather than the raw profiles row: that
+// row carries email, fcm_token and the pgvector embedding, none of which a
+// language model needs.
 
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+
+import '../config/ai_config.dart';
 
 /// Thrown for anything we can turn into a message worth showing the user
 /// — a non-2xx response with a real `error` field from the Flask service,
@@ -28,10 +31,32 @@ class AiServiceException implements Exception {
   String toString() => message;
 }
 
-class AiService {
-  AiService(this._baseUrl);
+/// One line of a conversation, replayed to /api/chat so follow-up questions
+/// have the context of the earlier answers.
+class AiChatTurn {
+  const AiChatTurn({required this.fromUser, required this.text});
 
-  final String _baseUrl;
+  final bool fromUser;
+  final String text;
+
+  Map<String, dynamic> toJson() => {'role': fromUser ? 'user' : 'assistant', 'text': text};
+}
+
+class SkillSuggestions {
+  const SkillSuggestions({required this.skills, required this.reason});
+
+  final List<String> skills;
+  final String reason;
+}
+
+class AiService {
+  /// Omit [_baseUrlOverride] to use whatever AiConfig resolves at call time,
+  /// so an address changed from inside the app takes effect immediately.
+  AiService([this._baseUrlOverride]);
+
+  final String? _baseUrlOverride;
+
+  String get _baseUrl => _baseUrlOverride ?? AiConfig.baseUrl;
 
   /// Generous but bounded — Gemini generation plus a cold ngrok/Flask
   /// round trip can genuinely take several seconds; this stops a dead
@@ -53,18 +78,26 @@ class AiService {
   /// into the separate `skills` table, and education_summary currently
   /// has no structured destination at all. Callers must not blindly
   /// forward this map into a single profiles update.
-  Future<Map<String, dynamic>> parseCv(String cvText) async {
-    final body = await _post('/api/parse-cv', {'cv_text': cvText});
-    return body;
+  Future<Map<String, dynamic>> parseCv(String cvText) {
+    return _post('/api/parse-cv', {'cv_text': cvText});
   }
 
-  /// POSTs {message, user_profile} to /api/chat and returns the plain-text
-  /// reply. `profile` should be whatever ProfileService.fetchProfile()
-  /// returned for the current user — the server injects it into the
-  /// system prompt so replies are actually specific to this person,
-  /// rather than generic (see SYSTEM_PROMPT in ai/app.py).
-  Future<String> chat({required String message, required Map<String, dynamic> profile}) async {
-    final body = await _post('/api/chat', {'message': message, 'user_profile': profile});
+  /// POSTs {message, user_profile, history, mode} to /api/chat and returns
+  /// the plain-text reply. [history] is the conversation so far, oldest
+  /// first, NOT including [message]. [onboarding] switches the service into
+  /// guided setup: one missing profile section per reply.
+  Future<String> chat({
+    required String message,
+    required Map<String, dynamic> profile,
+    List<AiChatTurn> history = const [],
+    bool onboarding = false,
+  }) async {
+    final body = await _post('/api/chat', {
+      'message': message,
+      'user_profile': profile,
+      if (history.isNotEmpty) 'history': history.map((t) => t.toJson()).toList(),
+      if (onboarding) 'mode': 'onboarding',
+    });
     final reply = body['reply'];
     if (reply is! String) {
       throw AiServiceException('The assistant returned an unexpected response shape.');
@@ -72,7 +105,43 @@ class AiService {
     return reply;
   }
 
+  /// POSTs the profile to /api/suggest-skills. The service returns
+  /// schema-enforced JSON and strips anything already on the profile, so
+  /// every name here is safe to offer as "add to my profile".
+  Future<SkillSuggestions> suggestSkills({required Map<String, dynamic> profile}) async {
+    final body = await _post('/api/suggest-skills', {'user_profile': profile});
+    final skills = body['skills'];
+    if (skills is! List) {
+      throw AiServiceException('The assistant returned an unexpected response shape.');
+    }
+    return SkillSuggestions(
+      skills: skills.whereType<String>().toList(),
+      reason: body['reason'] as String? ?? '',
+    );
+  }
+
+  /// GET /health on [baseUrl] — the address being tried, not the saved one
+  /// — so a new tunnel URL can be checked before it replaces a working one.
+  static Future<bool> isHealthy(String baseUrl) async {
+    try {
+      final res = await http
+          .get(Uri.parse('$baseUrl/health'), headers: _headers)
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return false;
+      final decoded = jsonDecode(res.body);
+      return decoded is Map && decoded['status'] == 'ok';
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> payload) async {
+    if (_baseUrlOverride == null && !AiConfig.isConfigured) {
+      throw AiServiceException(
+        'The AI server address hasn\'t been set. Add it under "AI server address".',
+      );
+    }
+
     http.Response res;
     try {
       res = await http
@@ -80,7 +149,7 @@ class AiService {
           .timeout(_timeout);
     } on TimeoutException {
       throw AiServiceException(
-        'The AI assistant took too long to respond. It may be offline — check the tunnel is still running.',
+        'The AI assistant took too long to respond. It may be offline — try again in a moment.',
       );
     } catch (e) {
       // Covers SocketException (host unreachable / DNS failure / tunnel
@@ -88,7 +157,7 @@ class AiService {
       // broad: every one of these means "couldn't reach the service,"
       // and the user doesn't need the exact Dart exception type to act on it.
       throw AiServiceException(
-        'Couldn\'t reach the AI assistant. Confirm AiConfig.baseUrl still points at a live tunnel.',
+        'Couldn\'t reach the AI assistant. The server may be offline or its address may have changed.',
       );
     }
 
@@ -105,7 +174,7 @@ class AiService {
       // process entirely. A raw HTML blob is not useful to show the user.
       throw AiServiceException(
         'The AI assistant sent back something that wasn\'t valid JSON (HTTP ${res.statusCode}). '
-        'The tunnel may be pointed at the wrong thing.',
+        'The server address may be pointing at the wrong thing.',
       );
     }
 
