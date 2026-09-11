@@ -437,9 +437,10 @@ class _PopiaNotice extends StatelessWidget {
     (
       'Who can see it',
       'Signed-in members can see your name, photo, headline, bio and links, and the sections you allow '
-          'below. Your posts and comments are public. Messages are visible only to you and the person you are '
-          'talking to. Employers see the applications you send them. Richfield administrators can see accounts '
-          'so they can verify, moderate and support them.',
+          'below. The app never shows other members your email address, but at the moment signed-in members '
+          'can still read it through the platform\'s database API. Your posts and comments are public. Messages '
+          'are visible only to you and the person you are talking to. Employers see the applications you send '
+          'them. Richfield administrators can see accounts so they can verify, moderate and support them.',
     ),
     (
       'Where it is processed',
