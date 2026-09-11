@@ -19,6 +19,7 @@ import '../services/ai_service.dart';
 import '../services/auth_error_mapper.dart';
 import '../services/profile_context_service.dart';
 import '../services/profile_service.dart';
+import '../widgets/ai_consent_prompt.dart';
 
 class CvImportScreen extends StatefulWidget {
   const CvImportScreen({super.key});
@@ -71,6 +72,14 @@ class _CvImportScreenState extends State<CvImportScreen> {
       setState(() => _error = 'Your session has expired. Sign in again.');
       return;
     }
+    if (!await ensureAiConsent(context)) {
+      if (mounted) {
+        setState(() => _error = 'Reading your CV uses Google Gemini, so it needs your permission first. '
+            'Allow it to continue, or add your details to your profile by hand.');
+      }
+      return;
+    }
+    if (!mounted) return;
 
     FocusScope.of(context).unfocus();
     setState(() {

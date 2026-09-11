@@ -27,6 +27,7 @@ import '../services/ai_service.dart';
 import '../services/auth_error_mapper.dart';
 import '../services/profile_context_service.dart';
 import '../services/profile_service.dart';
+import '../widgets/ai_consent_prompt.dart';
 import 'cv_import_screen.dart';
 
 class AiAssistantScreen extends StatefulWidget {
@@ -153,10 +154,23 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
 
   String _describe(Object e) => e is AiServiceException ? e.message : AuthErrorMapper.fromAny(e);
 
+  Future<bool> _aiAllowed() async {
+    if (await ensureAiConsent(context)) return true;
+    if (mounted) {
+      _add(_Msg(
+        _Kind.note,
+        'The assistant needs your permission before it sends anything to Google Gemini. '
+        'You can allow it any time from Privacy & data in the account menu.',
+      ));
+    }
+    return false;
+  }
+
   Future<void> _send(String text, {bool hidden = false}) async {
     final message = text.trim();
     final ctx = _ctx;
     if (message.isEmpty || _busy || ctx == null) return;
+    if (!await _aiAllowed() || !mounted) return;
 
     // The transcript BEFORE this message; the service appends `message`
     // itself as the newest user turn.
@@ -197,6 +211,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   Future<void> _suggestSkills() async {
     final ctx = _ctx;
     if (ctx == null || _busy) return;
+    if (!await _aiAllowed() || !mounted) return;
     setState(() {
       _messages.removeWhere((m) => m.kind == _Kind.error);
       _busy = true;
