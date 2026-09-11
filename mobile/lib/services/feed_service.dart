@@ -5,25 +5,68 @@ class FeedService {
   FeedService(this._client);
   final SupabaseClient _client;
 
-  /// Most recent posts, with the author's name/role embedded via
+  /// Columns every post card needs, with the author's name/role embedded via
   /// posts.author_id -> profiles.id (the only FK from posts to profiles,
   /// so the embed is unambiguous).
   ///
-  /// `post_reposts(count)` is a PostgREST aggregate embed: it returns
-  /// [{'count': n}] per row, so the feed can render a real repost total
-  /// without an N+1 query per card. `post_reposts!inner` is deliberately
-  /// NOT used — inner would drop every post that has zero reposts.
+  /// `post_reposts(count)`, `reactions(count)` and `comments(count)` are
+  /// PostgREST aggregate embeds: each returns [{'count': n}] per row, so a
+  /// card renders real totals without an N+1 query. Each of those tables has
+  /// exactly one FK to posts. `!inner` is deliberately NOT used — inner would
+  /// drop every post with zero of them.
+  static const postFields = 'id, body, image_path, video_path, thumbnail_path, created_at, '
+      'profiles(first_name, last_name, role, avatar_path), '
+      'post_reposts(count), reactions(count), comments(count)';
+
   Future<List<Map<String, dynamic>>> fetchRecentPosts({int limit = 30}) async {
     final rows = await _client
         .from('posts')
-        .select(
-          'id, body, image_path, video_path, thumbnail_path, created_at, '
-          'profiles(first_name, last_name, role, avatar_path), '
-          'post_reposts(count)',
-        )
+        .select(postFields)
         .order('created_at', ascending: false)
         .limit(limit);
     return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// One member's own posts, newest first — the Portfolio tab's activity.
+  Future<List<Map<String, dynamic>>> fetchPostsByAuthor(String authorId, {int limit = 20}) async {
+    final rows = await _client
+        .from('posts')
+        .select(postFields)
+        .eq('author_id', authorId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Posts a member reposted, newest repost first, as
+  /// {created_at: <when reposted>, posts: <post row>}. post_reposts has one
+  /// FK to posts, so the embed is unambiguous, and the profiles embed inside
+  /// it is the ORIGINAL author — which is who the card should credit.
+  ///
+  /// Reposting never showed up on anyone's profile because the Portfolio tab
+  /// had no activity section at all, only MockData.
+  Future<List<Map<String, dynamic>>> fetchRepostsBy(String userId, {int limit = 20}) async {
+    final rows = await _client
+        .from('post_reposts')
+        .select('created_at, posts($postFields)')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// The next published event, for the Feed banner. events' SELECT policy
+  /// already hides unpublished rows from non-admins; the status filter is
+  /// explicit so an administrator's feed doesn't advertise a draft either.
+  Future<Map<String, dynamic>?> fetchNextEvent() async {
+    return await _client
+        .from('events')
+        .select('id, title, description, event_date, location')
+        .eq('status', 'published')
+        .gte('event_date', DateTime.now().toUtc().toIso8601String())
+        .order('event_date')
+        .limit(1)
+        .maybeSingle();
   }
 
   /// The set of post ids the signed-in user has reposted, so the feed can
