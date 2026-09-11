@@ -5344,7 +5344,7 @@ class _RichfieldCareerAiSheetState extends State<RichfieldCareerAiSheet> {
                   icon: Icons.description_outlined,
                   iconBg: AppColors.secondaryContainer,
                   title: 'Import from your CV',
-                  body: 'Paste your CV or describe your experience. AI extracts a headline, skills '
+                  body: 'Upload your CV as a PDF, or paste it. AI extracts a headline, skills '
                       'and education for you to review before anything is saved.',
                   cta: 'Import',
                   onTap: () => _open(CvImportScreen()),

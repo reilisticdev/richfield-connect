@@ -1,16 +1,25 @@
 // mobile/lib/screens/cv_import_screen.dart
 //
-// NLP-assisted profile building from a CV or free text (rubric 8.3, and part
-// of the section 6 profile assistant). The user pastes CV text or describes
-// their experience in their own words; /api/parse-cv has Gemini extract
-// name, headline, skills and an education summary as schema-enforced JSON;
-// the user reviews every field before anything is written.
+// NLP-assisted profile building from a CV (rubric 8.3, and part of the
+// section 6 profile assistant). The member uploads their CV as a PDF, or
+// pastes text / describes their experience instead; /api/parse-cv has Gemini
+// extract name, headline, skills and an education summary as schema-enforced
+// JSON; the member reviews every field before anything is written.
+//
+// PDF is the main path since Keshav's QA pass (2026-09-11): people have a CV
+// file, not CV text they want to retype. Gemini reads the PDF itself, so
+// there is no text extraction on the phone and scanned CVs work too. The file
+// goes only to the AI service for this one extraction; nothing is uploaded to
+// Supabase Storage.
 //
 // Review-before-write is deliberate. A model can misread a CV, and silently
 // overwriting a headline the user wrote themselves is worse than asking them
 // to tick a box. Current values are shown beside extracted ones, and a field
 // that is already filled in starts unticked.
 
+import 'dart:typed_data';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -31,6 +40,17 @@ class CvImportScreen extends StatefulWidget {
 class _CvImportScreenState extends State<CvImportScreen> {
   static const _maxChars = 15000;
 
+  /// Matches MAX_CV_PDF_BYTES in ai/app.py. Checked here as well so an
+  /// oversized file fails at once instead of after a slow upload.
+  static const _maxPdfBytes = 5 * 1024 * 1024;
+
+  static const _pdfTypes = XTypeGroup(
+    label: 'PDF',
+    extensions: ['pdf'],
+    mimeTypes: ['application/pdf'],
+    uniformTypeIdentifiers: ['com.adobe.pdf'],
+  );
+
   final _client = Supabase.instance.client;
   late final _profileService = ProfileService(_client);
   late final _contextService = ProfileContextService(_client);
@@ -40,6 +60,14 @@ class _CvImportScreenState extends State<CvImportScreen> {
   bool _parsing = false;
   bool _saving = false;
   String? _error;
+
+  /// Name of the PDF being read, or last read.
+  String? _pdfName;
+
+  /// Whether the extraction in progress came from a PDF rather than text.
+  bool _parsingPdf = false;
+
+  bool _showPaste = false;
 
   /// Null until an extraction has succeeded; the review section keys off it.
   ProfileContext? _ctx;
@@ -61,9 +89,42 @@ class _CvImportScreenState extends State<CvImportScreen> {
     super.dispose();
   }
 
-  Future<void> _extract() async {
+  Future<void> _pickPdf() async {
+    setState(() => _error = null);
+    final XFile? file;
+    try {
+      file = await openFile(acceptedTypeGroups: const [_pdfTypes]);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Couldn\'t open a file picker on this device. Paste your CV text instead.');
+      }
+      return;
+    }
+    // Backing out of the picker is a normal outcome, not an error.
+    if (file == null || !mounted) return;
+
+    final size = await file.length();
+    if (!mounted) return;
+    if (size > _maxPdfBytes) {
+      setState(() => _error =
+          'That PDF is ${(size / (1024 * 1024)).toStringAsFixed(1)} MB. Choose one under 5 MB.');
+      return;
+    }
+
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+    // The picker filters by type, but some file providers ignore the filter.
+    if (bytes.length < 5 || String.fromCharCodes(bytes.sublist(0, 5)) != '%PDF-') {
+      setState(() => _error = 'That file isn\'t a PDF. Save or export your CV as a PDF and try again.');
+      return;
+    }
+    await _extract(pdf: bytes, pdfName: file.name);
+  }
+
+  /// Runs one extraction: from [pdf] when given, otherwise from the text box.
+  Future<void> _extract({Uint8List? pdf, String? pdfName}) async {
     final text = _cv.text.trim();
-    if (text.length < 30) {
+    if (pdf == null && text.length < 30) {
       setState(() => _error = 'Paste a bit more — at least a few lines about your studies or experience.');
       return;
     }
@@ -84,12 +145,14 @@ class _CvImportScreenState extends State<CvImportScreen> {
     FocusScope.of(context).unfocus();
     setState(() {
       _parsing = true;
+      _parsingPdf = pdf != null;
+      if (pdf != null) _pdfName = pdfName;
       _error = null;
     });
 
     try {
       final results = await Future.wait<Object>([
-        _ai.parseCv(text),
+        pdf != null ? _ai.parseCvPdf(bytes: pdf, fileName: pdfName ?? 'cv.pdf') : _ai.parseCv(text),
         _contextService.load(userId),
       ]);
       if (!mounted) return;
@@ -196,6 +259,7 @@ class _CvImportScreenState extends State<CvImportScreen> {
     final ctx = _ctx;
     final anythingPicked = _useName || _useHeadline || _useEducation || _pickedSkills.isNotEmpty;
     final locked = _parsing || _saving;
+    final readingText = _parsing && !_parsingPdf;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -209,27 +273,13 @@ class _CvImportScreenState extends State<CvImportScreen> {
           Text('Let AI read your CV', style: AppText.headlineMd()),
           const SizedBox(height: 4),
           Text(
-            'Paste your CV, or describe your studies, skills and experience in your own words. '
-            'The assistant pulls out a headline, skills and education — you choose what gets saved.',
+            'Upload your CV as a PDF. The assistant pulls out a headline, skills and education — '
+            'you choose what gets saved.',
             style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpace.base),
-          TextField(
-            controller: _cv,
-            enabled: !locked,
-            minLines: 8,
-            maxLines: 14,
-            maxLength: _maxChars,
-            decoration: InputDecoration(
-              hintText: 'e.g. BSc IT student at Richfield (2024–2026). Built a Flutter app for…',
-              filled: true,
-              fillColor: AppColors.surfaceContainerLow,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
+          _uploadCard(locked),
+          const SizedBox(height: AppSpace.sm),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -237,21 +287,46 @@ class _CvImportScreenState extends State<CvImportScreen> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'This text is sent to Richfield Connect\'s AI service (Google Gemini) only to extract '
-                  'these fields. Nothing is saved to your profile until you tap Apply.',
+                  'Your CV is sent to Richfield Connect\'s AI service (Google Gemini) only to extract these '
+                  'fields; Richfield Connect doesn\'t keep the file. Nothing is saved to your profile until '
+                  'you tap Apply.',
                   style: AppText.bodySm(color: AppColors.onSurfaceVariant),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: AppSpace.md),
-          OutlinedButton.icon(
-            onPressed: locked ? null : _extract,
-            icon: _parsing ? _spinner() : const Icon(Icons.auto_awesome),
-            label: Text(_parsing
-                ? 'Reading your CV…'
-                : (ctx == null ? 'Extract with AI' : 'Extract again')),
+          const SizedBox(height: AppSpace.sm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: locked ? null : () => setState(() => _showPaste = !_showPaste),
+              icon: Icon(_showPaste ? Icons.expand_less : Icons.edit_note),
+              label: Text(_showPaste ? 'Hide text box' : 'No PDF? Paste text or describe your experience'),
+            ),
           ),
+          if (_showPaste) ...[
+            TextField(
+              controller: _cv,
+              enabled: !locked,
+              minLines: 8,
+              maxLines: 14,
+              maxLength: _maxChars,
+              decoration: InputDecoration(
+                hintText: 'e.g. BSc IT student at Richfield (2024–2026). Built a Flutter app for…',
+                filled: true,
+                fillColor: AppColors.surfaceContainerLow,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: locked ? null : () => _extract(),
+              icon: readingText ? _spinner() : const Icon(Icons.auto_awesome),
+              label: Text(readingText ? 'Reading your text…' : 'Extract from text'),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: AppSpace.sm),
             Row(
@@ -280,6 +355,59 @@ class _CvImportScreenState extends State<CvImportScreen> {
           ],
           const SizedBox(height: AppSpace.xl),
         ],
+      ),
+    );
+  }
+
+  /// The main action: a large tap target that opens the system file picker
+  /// and shows which PDF is being, or was last, read.
+  Widget _uploadCard(bool locked) {
+    final name = _pdfName;
+    final reading = _parsing && _parsingPdf;
+    return Material(
+      color: AppColors.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(AppRadius.xl),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        onTap: locked ? null : _pickPdf,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.base, vertical: AppSpace.lg),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.xl),
+            border: Border.all(color: AppColors.outlineVariant),
+          ),
+          child: Column(
+            children: [
+              if (reading)
+                const SizedBox(width: 36, height: 36, child: CircularProgressIndicator(strokeWidth: 3))
+              else
+                Icon(
+                  name == null ? Icons.upload_file : Icons.picture_as_pdf_outlined,
+                  size: 40,
+                  color: AppColors.primary,
+                ),
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                reading ? 'Reading your CV…' : (name ?? 'Upload CV (PDF)'),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.labelLg(),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                reading
+                    ? (name ?? '')
+                    : (name == null ? 'Tap to choose a PDF, up to 5 MB' : 'Tap to choose a different PDF'),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -322,7 +450,7 @@ class _CvImportScreenState extends State<CvImportScreen> {
       Text('Skills', style: AppText.labelLg()),
       const SizedBox(height: 6),
       if (_skills.isEmpty)
-        Text('No skills found in that text.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
+        Text('No skills found in your CV.', style: AppText.bodySm(color: AppColors.onSurfaceVariant))
       else
         Wrap(
           spacing: 6,

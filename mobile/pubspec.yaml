@@ -27,6 +27,7 @@ dependencies:
   firebase_messaging: ^16.6.0
   # AiService's HTTP client for the /ai/ Flask microservice.
   http: ^1.6.0
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:
