@@ -63,6 +63,8 @@ import 'services/profile_context_service.dart';
 import 'screens/messages_screen.dart';
 import 'screens/network_screen.dart';
 import 'screens/notifications_screen.dart';
+import 'screens/comments_sheet.dart';
+import 'widgets/report_content_dialog.dart';
 import 'services/notifications_service.dart';
 import 'services/realtime_hub.dart';
 import 'services/portfolio_service.dart';
@@ -433,12 +435,18 @@ class FeedPost {
   /// Database id.
   final String? id;
 
+  /// posts.author_id, so a card can hide Report on the viewer's own post.
+  final String? authorId;
+
   /// Public CDN url for an image post (posts.image_path resolved through
   /// the post-media bucket). Null for text-only and video posts.
   final String? imageUrl;
 
   /// Whether the signed-in user has already reposted this.
   final bool isReposted;
+
+  /// Whether the signed-in user has already liked this.
+  final bool isReacted;
 
   final FeedPostType type;
   final String authorName;
@@ -456,8 +464,10 @@ class FeedPost {
 
   FeedPost({
     this.id,
+    this.authorId,
     this.imageUrl,
     this.isReposted = false,
+    this.isReacted = false,
     required this.type,
     required this.authorName,
     required this.authorRole,
@@ -470,13 +480,21 @@ class FeedPost {
     required this.reactionCountC,
   });
 
-  /// Cheap immutable update so the feed can flip one card's repost state
-  /// without re-querying the whole list.
-  FeedPost copyWith({bool? isReposted, int? reactionCountC}) {
+  /// Cheap immutable update so the feed can flip one card's like, comment or
+  /// repost state without re-querying the whole list.
+  FeedPost copyWith({
+    bool? isReposted,
+    bool? isReacted,
+    int? reactionCountA,
+    int? reactionCountB,
+    int? reactionCountC,
+  }) {
     return FeedPost(
       id: id,
+      authorId: authorId,
       imageUrl: imageUrl,
       isReposted: isReposted ?? this.isReposted,
+      isReacted: isReacted ?? this.isReacted,
       type: type,
       authorName: authorName,
       authorRole: authorRole,
@@ -484,8 +502,8 @@ class FeedPost {
       timeAgo: timeAgo,
       body: body,
       videoLabel: videoLabel,
-      reactionCountA: reactionCountA,
-      reactionCountB: reactionCountB,
+      reactionCountA: reactionCountA ?? this.reactionCountA,
+      reactionCountB: reactionCountB ?? this.reactionCountB,
       reactionCountC: reactionCountC ?? this.reactionCountC,
     );
   }
@@ -496,6 +514,7 @@ class FeedPost {
 FeedPost _feedPostFromRow(
   Map<String, dynamic> row, {
   Set<String> repostedIds = const <String>{},
+  Set<String> reactedIds = const <String>{},
   MediaService? mediaService,
 }) {
   final profile = row['profiles'] as Map<String, dynamic>?;
@@ -506,10 +525,12 @@ FeedPost _feedPostFromRow(
   final createdAt = DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now();
   return FeedPost(
     id: id,
+    authorId: row['author_id'] as String?,
     imageUrl: (imagePath != null && imagePath.isNotEmpty && mediaService != null)
         ? mediaService.postImageUrl(imagePath)
         : null,
     isReposted: id != null && repostedIds.contains(id),
+    isReacted: id != null && reactedIds.contains(id),
     type: row['video_path'] != null ? FeedPostType.video : FeedPostType.text,
     authorName: name.isEmpty ? 'Richfield Member' : name,
     authorRole: role == null || role.isEmpty ? '' : role[0].toUpperCase() + role.substring(1),
@@ -2695,6 +2716,9 @@ class _FeedScreenState extends State<FeedScreen> {
   /// defaulting to off and flipping a moment later.
   Set<String> _repostedIds = <String>{};
 
+  /// Post ids this user has liked, loaded the same way.
+  Set<String> _reactedIds = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -2726,19 +2750,24 @@ class _FeedScreenState extends State<FeedScreen> {
       final results = await Future.wait<Object>([
         _feedService.fetchRecentPosts(),
         if (userId != null) _feedService.fetchMyRepostedPostIds(userId),
+        if (userId != null) _feedService.fetchMyReactedPostIds(userId),
       ]);
 
       final rows = results[0] as List<Map<String, dynamic>>;
       final reposted =
           results.length > 1 ? results[1] as Set<String> : <String>{};
+      final reacted =
+          results.length > 2 ? results[2] as Set<String> : <String>{};
 
       if (!mounted) return;
       setState(() {
         _repostedIds = reposted;
+        _reactedIds = reacted;
         _posts = rows
             .map((row) => _feedPostFromRow(
                   row,
                   repostedIds: reposted,
+                  reactedIds: reacted,
                   mediaService: _mediaService,
                 ))
             .toList();
@@ -2797,6 +2826,71 @@ class _FeedScreenState extends State<FeedScreen> {
         SnackBar(content: Text(AuthErrorMapper.fromAny(e))),
       );
     }
+  }
+
+  /// Same optimistic pattern as reposts. reactions allows one row per member
+  /// per post, so a double tap can't count twice.
+  Future<void> _toggleReaction(FeedPost post) async {
+    final postId = post.id;
+    final userId = _authService.currentUser?.id;
+    if (postId == null || userId == null) return;
+
+    final wasReacted = post.isReacted;
+
+    void apply(bool reacted) {
+      setState(() {
+        if (reacted) {
+          _reactedIds.add(postId);
+        } else {
+          _reactedIds.remove(postId);
+        }
+        _posts = _posts
+            .map((p) => p.id == postId
+                ? p.copyWith(
+                    isReacted: reacted,
+                    reactionCountA: (p.reactionCountA + (reacted ? 1 : -1)).clamp(0, 1 << 30),
+                  )
+                : p)
+            .toList();
+      });
+    }
+
+    apply(!wasReacted);
+
+    try {
+      await _feedService.toggleReaction(postId: postId, userId: userId, currentlyReacted: wasReacted);
+    } catch (e) {
+      if (!mounted) return;
+      apply(wasReacted);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AuthErrorMapper.fromAny(e))),
+      );
+    }
+  }
+
+  void _openComments(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showCommentsSheet(
+      context,
+      postId: postId,
+      onCountChanged: (count) {
+        if (!mounted) return;
+        setState(() {
+          _posts = _posts.map((p) => p.id == postId ? p.copyWith(reactionCountB: count) : p).toList();
+        });
+      },
+    );
+  }
+
+  void _reportPost(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showReportContentDialog(
+      context,
+      contentType: post.type == FeedPostType.video ? 'video' : 'post',
+      contentId: postId,
+    );
   }
 
   @override
@@ -2882,13 +2976,21 @@ class _FeedScreenState extends State<FeedScreen> {
                   child: post.type == FeedPostType.text
                       ? _TextPostCard(
                           post: post,
-                          onRepost:
-                              post.id == null ? null : () => _toggleRepost(post),
+                          onRepost: post.id == null ? null : () => _toggleRepost(post),
+                          onReact: post.id == null ? null : () => _toggleReaction(post),
+                          onComment: post.id == null ? null : () => _openComments(post),
+                          onReport: post.id == null || post.authorId == _authService.currentUser?.id
+                              ? null
+                              : () => _reportPost(post),
                         )
                       : _VideoPostCard(
                           post: post,
-                          onRepost:
-                              post.id == null ? null : () => _toggleRepost(post),
+                          onRepost: post.id == null ? null : () => _toggleRepost(post),
+                          onReact: post.id == null ? null : () => _toggleReaction(post),
+                          onComment: post.id == null ? null : () => _openComments(post),
+                          onReport: post.id == null || post.authorId == _authService.currentUser?.id
+                              ? null
+                              : () => _reportPost(post),
                         ),
                 ),
               ),
@@ -2999,7 +3101,10 @@ class _FeedScreenState extends State<FeedScreen> {
 class _TextPostCard extends StatelessWidget {
   final FeedPost post;
   final VoidCallback? onRepost;
-  _TextPostCard({required this.post, this.onRepost});
+  final VoidCallback? onReact;
+  final VoidCallback? onComment;
+  final VoidCallback? onReport;
+  _TextPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport});
 
   @override
   Widget build(BuildContext context) {
@@ -3007,7 +3112,7 @@ class _TextPostCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _postAuthorRow(post),
+          _postAuthorRow(post, onReport: onReport),
           SizedBox(height: AppSpace.sm),
           if (post.body.isNotEmpty) Text(post.body, style: AppText.bodyMd()),
           if (post.imageUrl != null) ...[
@@ -3039,23 +3144,7 @@ class _TextPostCard extends StatelessWidget {
             ),
           ],
           SizedBox(height: AppSpace.sm),
-          _reactionRow(
-            aLabel: '${post.reactionCountA}', aIcon: Icons.thumb_up_alt_outlined,
-            bLabel: '${post.reactionCountB} Comments', bIcon: Icons.mode_comment_outlined,
-            cLabel: '${post.reactionCountC} Reposts', cIcon: Icons.repeat,
-            actions: ['Endorse', 'Comment', 'Repost', 'Share'],
-            actionIcons: [
-              Icons.thumb_up_alt_outlined,
-              Icons.mode_comment_outlined,
-              Icons.repeat,
-              Icons.share_outlined,
-            ],
-            // Endorse / Comment / Share have no UI behind them yet, so they
-            // stay null and render disabled — honest, rather than a button
-            // that looks live and does nothing.
-            actionHandlers: [null, null, onRepost, null],
-            activeActionIndex: post.isReposted ? 2 : null,
-          ),
+          _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
         ],
       ),
     );
@@ -3068,7 +3157,10 @@ class _TextPostCard extends StatelessWidget {
 class _VideoPostCard extends StatelessWidget {
   final FeedPost post;
   final VoidCallback? onRepost;
-  _VideoPostCard({required this.post, this.onRepost});
+  final VoidCallback? onReact;
+  final VoidCallback? onComment;
+  final VoidCallback? onReport;
+  _VideoPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport});
 
   @override
   Widget build(BuildContext context) {
@@ -3079,7 +3171,7 @@ class _VideoPostCard extends StatelessWidget {
         children: [
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _postAuthorRow(post),
+            child: _postAuthorRow(post, onReport: onReport),
           ),
           if (post.body.isNotEmpty)
             Padding(
@@ -3131,20 +3223,7 @@ class _VideoPostCard extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _reactionRow(
-              aLabel: '${post.reactionCountA}', aIcon: Icons.thumb_up_alt_outlined,
-              bLabel: '${post.reactionCountB} Comments', bIcon: Icons.mode_comment_outlined,
-              cLabel: '${post.reactionCountC} Reposts', cIcon: Icons.repeat,
-              actions: ['Endorse', 'Comment', 'Repost', 'Share'],
-              actionIcons: [
-                Icons.thumb_up_alt_outlined,
-                Icons.mode_comment_outlined,
-                Icons.repeat,
-                Icons.share_outlined,
-              ],
-              actionHandlers: [null, null, onRepost, null],
-              activeActionIndex: post.isReposted ? 2 : null,
-            ),
+            child: _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
           ),
         ],
       ),
@@ -3580,7 +3659,7 @@ class _DailyBars extends StatelessWidget {
   }
 }
 
-Widget _postAuthorRow(FeedPost post) {
+Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport}) {
   return Row(
     children: [
       InitialsAvatar(initials: post.authorName.split(' ').map((e) => e[0]).take(2).join()),
@@ -3622,8 +3701,43 @@ Widget _postAuthorRow(FeedPost post) {
           ),
         ),
       ),
-      Icon(Icons.more_horiz, color: AppColors.onSurfaceVariant),
+      if (onReport != null)
+        PopupMenuButton<String>(
+          tooltip: 'More',
+          icon: Icon(Icons.more_horiz, color: AppColors.onSurfaceVariant),
+          onSelected: (_) => onReport(),
+          itemBuilder: (_) => [
+            PopupMenuItem(value: 'report', child: Text('Report post')),
+          ],
+        ),
     ],
+  );
+}
+
+/// Like / Comment / Repost / Share for a feed card. Share has nothing behind
+/// it yet, so it stays disabled.
+Widget _engagementRow(
+  FeedPost post, {
+  VoidCallback? onReact,
+  VoidCallback? onComment,
+  VoidCallback? onRepost,
+}) {
+  return _reactionRow(
+    aLabel: '${post.reactionCountA} ${post.reactionCountA == 1 ? 'Like' : 'Likes'}',
+    aIcon: Icons.thumb_up_alt_outlined,
+    bLabel: '${post.reactionCountB} ${post.reactionCountB == 1 ? 'Comment' : 'Comments'}',
+    bIcon: Icons.mode_comment_outlined,
+    cLabel: '${post.reactionCountC} ${post.reactionCountC == 1 ? 'Repost' : 'Reposts'}',
+    cIcon: Icons.repeat,
+    actions: ['Like', 'Comment', 'Repost', 'Share'],
+    actionIcons: [
+      post.isReacted ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+      Icons.mode_comment_outlined,
+      Icons.repeat,
+      Icons.share_outlined,
+    ],
+    actionHandlers: [onReact, onComment, onRepost, null],
+    activeActions: {if (post.isReacted) 0, if (post.isReposted) 2},
   );
 }
 
@@ -3644,7 +3758,7 @@ Widget _reactionRow({
   required List<String> actions,
   required List<IconData> actionIcons,
   List<VoidCallback?>? actionHandlers,
-  int? activeActionIndex,
+  Set<int> activeActions = const {},
 }) {
   return Column(
     children: [
@@ -3665,7 +3779,7 @@ Widget _reactionRow({
         children: List.generate(actions.length, (i) {
           final handler =
               (actionHandlers != null && i < actionHandlers.length) ? actionHandlers[i] : null;
-          final active = activeActionIndex == i;
+          final active = activeActions.contains(i);
           final tint = active
               ? AppColors.primary
               : (handler == null ? AppColors.outline : AppColors.onSurfaceVariant);
@@ -4182,11 +4296,14 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final userId = _userId;
     if (userId == null) return;
     try {
-      final results = await Future.wait([
+      final results = await Future.wait<Object>([
         _feedService.fetchPostsByAuthor(userId),
         _feedService.fetchRepostsBy(userId),
+        _feedService.fetchMyReactedPostIds(userId),
       ]);
-      final reposts = results[1];
+      final ownPosts = results[0] as List<Map<String, dynamic>>;
+      final reposts = results[1] as List<Map<String, dynamic>>;
+      final reactedIds = results[2] as Set<String>;
       final repostedIds = {
         for (final r in reposts)
           if (r['posts'] is Map) (r['posts'] as Map)['id'] as String,
@@ -4194,9 +4311,14 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
       DateTime when(Object? iso) => DateTime.tryParse(iso as String? ?? '') ?? DateTime.now();
 
       final items = <_ActivityItem>[
-        for (final row in results[0])
+        for (final row in ownPosts)
           _ActivityItem(
-            post: _feedPostFromRow(row, repostedIds: repostedIds, mediaService: _mediaService),
+            post: _feedPostFromRow(
+              row,
+              repostedIds: repostedIds,
+              reactedIds: reactedIds,
+              mediaService: _mediaService,
+            ),
             at: when(row['created_at']),
             isRepost: false,
           ),
@@ -4206,6 +4328,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               post: _feedPostFromRow(
                 Map<String, dynamic>.from(r['posts'] as Map),
                 repostedIds: repostedIds,
+                reactedIds: reactedIds,
                 mediaService: _mediaService,
               ),
               at: when(r['created_at']),
@@ -4242,6 +4365,26 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     } catch (e) {
       _snack(AuthErrorMapper.fromAny(e));
     }
+  }
+
+  Future<void> _toggleReaction(FeedPost post) async {
+    final postId = post.id;
+    final userId = _userId;
+    if (postId == null || userId == null) return;
+    try {
+      await _feedService.toggleReaction(postId: postId, userId: userId, currentlyReacted: post.isReacted);
+      await _loadActivity();
+    } catch (e) {
+      _snack(AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  void _openComments(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showCommentsSheet(context, postId: postId, onCountChanged: (_) {}).then((_) {
+      if (mounted) _loadActivity();
+    });
   }
 
   void _snack(String text) {
@@ -5045,10 +5188,14 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                       ? _TextPostCard(
                           post: item.post,
                           onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
+                          onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
+                          onComment: item.post.id == null ? null : () => _openComments(item.post),
                         )
                       : _VideoPostCard(
                           post: item.post,
                           onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
+                          onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
+                          onComment: item.post.id == null ? null : () => _openComments(item.post),
                         ),
                 ],
               ),
