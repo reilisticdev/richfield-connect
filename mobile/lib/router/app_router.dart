@@ -77,6 +77,11 @@ GoRouter buildAppRouter(AuthService authService) {
           if (accountStatus == 'rejected' && state.matchedLocation != '/account-rejected') {
             return '/account-rejected';
           }
+          // Migration 033 also bans a suspended account, so this only covers
+          // the minutes until the current access token expires.
+          if (accountStatus == 'suspended' && state.matchedLocation != '/account-suspended') {
+            return '/account-suspended';
+          }
           if (state.matchedLocation.startsWith('/admin') && role != 'administrator') {
             return '/home'; // not an admin — bounce, don't 403 silently
           }
@@ -103,11 +108,15 @@ GoRouter buildAppRouter(AuthService authService) {
       GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
       GoRoute(
         path: '/pending-approval',
-        builder: (context, state) => AccountStatusScreen(authService: authService, rejected: false),
+        builder: (context, state) => AccountStatusScreen(authService: authService, status: 'pending'),
       ),
       GoRoute(
         path: '/account-rejected',
-        builder: (context, state) => AccountStatusScreen(authService: authService, rejected: true),
+        builder: (context, state) => AccountStatusScreen(authService: authService, status: 'rejected'),
+      ),
+      GoRoute(
+        path: '/account-suspended',
+        builder: (context, state) => AccountStatusScreen(authService: authService, status: 'suspended'),
       ),
       GoRoute(path: '/home', builder: (context, state) => _HomeGate(authService: authService)),
       GoRoute(path: '/admin', builder: (context, state) => const AdminHomeScreenPlaceholder()),
@@ -167,19 +176,36 @@ class MfaSetupScreenPlaceholder extends _PlaceholderScreen {
   const MfaSetupScreenPlaceholder() : super('Set up MFA');
 }
 
-/// Where a signed-in account that isn't active lands. These routes used to be
-/// a bare Text('Pending approval') / Text('Account rejected') with no way out:
-/// an alumni or business user who confirmed their email and signed in before
-/// approval had no sign-out button and no idea what they were waiting for.
+/// Where a signed-in account that isn't active lands: waiting for approval,
+/// not approved, or suspended by an administrator. Each explains the state
+/// and offers Sign out, so nobody is stuck on a blank screen.
 class AccountStatusScreen extends StatelessWidget {
-  const AccountStatusScreen({super.key, required this.authService, required this.rejected});
+  const AccountStatusScreen({super.key, required this.authService, required this.status});
 
   final AuthService authService;
-  final bool rejected;
+
+  /// profiles.account_status: 'pending', 'rejected' or 'suspended'.
+  final String status;
+
+  String get _title => switch (status) {
+        'rejected' => 'Account not approved',
+        'suspended' => 'Account suspended',
+        _ => 'Waiting for approval',
+      };
+
+  IconData get _icon => switch (status) {
+        'rejected' => Icons.block_outlined,
+        'suspended' => Icons.pause_circle_outline,
+        _ => Icons.hourglass_top_outlined,
+      };
 
   String _message(String? role) {
-    if (rejected) {
+    if (status == 'rejected') {
       return 'A Richfield administrator reviewed this account and did not approve it.';
+    }
+    if (status == 'suspended') {
+      return 'A Richfield administrator has suspended this account, so you can\'t use Richfield Connect '
+          'for now. Contact Richfield if you think this is a mistake.';
     }
     switch (role) {
       case 'alumni':
@@ -195,6 +221,7 @@ class AccountStatusScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final waiting = status == 'pending';
     return Scaffold(
       backgroundColor: AppColors.surfaceContainerLow,
       body: SafeArea(
@@ -208,14 +235,10 @@ class AccountStatusScreen extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                    rejected ? Icons.block_outlined : Icons.hourglass_top_outlined,
-                    size: 56,
-                    color: rejected ? AppColors.error : AppColors.primary,
-                  ),
+                  Icon(_icon, size: 56, color: waiting ? AppColors.primary : AppColors.error),
                   SizedBox(height: AppSpace.md),
                   Text(
-                    rejected ? 'Account not approved' : 'Waiting for approval',
+                    _title,
                     textAlign: TextAlign.center,
                     style: AppText.headlineLg(),
                   ),

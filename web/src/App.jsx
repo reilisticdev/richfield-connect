@@ -6,6 +6,7 @@ import RequireAdmin from "./components/RequireAdmin";
 
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Users from "./pages/Users";
 import Moderation from "./pages/Moderation";
 import Opportunities from "./pages/Opportunities";
 import Events from "./pages/Events";
@@ -51,6 +52,15 @@ function App() {
           element={
             <ProtectedAdminPage>
               <Dashboard />
+            </ProtectedAdminPage>
+          }
+        />
+
+        <Route
+          path="/users"
+          element={
+            <ProtectedAdminPage>
+              <Users />
             </ProtectedAdminPage>
           }
         />
@@ -112,4 +122,3 @@ function App() {
 }
 
 export default App;
-
