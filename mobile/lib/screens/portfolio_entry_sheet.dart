@@ -45,6 +45,7 @@ const _fields = <PortfolioSection, List<_Field>>{
   PortfolioSection.experience: [
     _Field('title', 'Job title', required: true),
     _Field('organisation', 'Organisation', required: true),
+    _Field('industry', 'Industry', hint: 'e.g. Software, Banking, Retail'),
     _Field('description', 'What you did', kind: _Kind.multiline),
     _Field('start_date', 'Start date', kind: _Kind.date),
     _Field('end_date', 'End date', kind: _Kind.date, hint: 'Leave empty if you still work here'),
