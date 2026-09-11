@@ -54,6 +54,7 @@ class AuthService {
     required SignupRole role,
     String? firstName,
     String? lastName,
+    Map<String, Object> details = const {},
   }) {
     // Client-side pre-check for the domain rule so the user sees the real
     // message instead of GoTrue's generic 500. See note above.
@@ -68,6 +69,12 @@ class AuthService {
       email: email,
       password: password,
       data: {
+        // Programme, campus, years, student number or company details from
+        // the register form. With email confirmation on there is no session
+        // to insert those rows with yet, so handle_new_user() (migration 028)
+        // writes the education / verification_claims / business_profiles
+        // rows from this metadata. Spread first so it can't override role.
+        ...details,
         'role': role.name, // 'student' | 'alumni' | 'business' — never 'administrator'
         'first_name': firstName,
         'last_name': lastName,
