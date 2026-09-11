@@ -28,6 +28,16 @@ class JobsService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
+  /// recommend_opportunities() (migration 026) scores approved listings
+  /// against the caller's own skills and most recent programme, and returns
+  /// which required skills matched so the card can say why. It reads
+  /// auth.uid() itself, so there is no profile id to pass — unlike
+  /// match_opportunities(), which ranks for whatever id it is given.
+  Future<List<Map<String, dynamic>>> fetchRecommendations({int limit = 5}) async {
+    final rows = await _client.rpc('recommend_opportunities', params: {'max_results': limit});
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
   Future<void> apply({required String opportunityId, required String studentId}) {
     return _client.from('applications').insert({
       'opportunity_id': opportunityId,
