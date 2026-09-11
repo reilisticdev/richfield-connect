@@ -461,6 +461,35 @@
 .reject-button:hover {
   background: #fecaca;
 }
+
+.approve-button:disabled,
+.reject-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.users-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.users-filters input,
+.users-filters select {
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.users-filters input {
+  flex: 1 1 240px;
+}
+
 .announcement-form {
   padding: 24px;
 }

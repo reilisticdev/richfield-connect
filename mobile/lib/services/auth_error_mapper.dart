@@ -30,6 +30,11 @@ class AuthErrorMapper {
           "correct for the account type you selected, then try again.";
     }
 
+    // Migration 033 bans suspended accounts, and GoTrue then refuses sign-in.
+    if (e.message.toLowerCase().contains('banned')) {
+      return 'This account has been suspended by a Richfield administrator.';
+    }
+
     return e.message;
   }
 
