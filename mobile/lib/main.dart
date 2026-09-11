@@ -2007,7 +2007,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', '2024', Icons.event_outlined,
+            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', alumni ? '2017' : '2024', Icons.event_outlined,
                 controller: _enrolmentYearController, keyboardType: TextInputType.number),
           ),
           SizedBox(width: AppSpace.sm),
