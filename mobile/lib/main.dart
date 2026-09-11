@@ -58,6 +58,7 @@ import 'services/push_notification_service.dart';
 import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
+import 'screens/career_pathways_screen.dart';
 import 'services/profile_context_service.dart';
 import 'screens/messages_screen.dart';
 import 'screens/network_screen.dart';
@@ -916,6 +917,16 @@ void _openAccountMenu(BuildContext context, AuthService authService) {
             onTap: () {
               Navigator.pop(context);
               _startOnboardingTour(context);
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.route_outlined),
+            title: Text('Career pathways'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => CareerPathwaysScreen()),
+              );
             },
           ),
           ListTile(
