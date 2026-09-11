@@ -14,9 +14,12 @@ class FeedService {
   /// card renders real totals without an N+1 query. Each of those tables has
   /// exactly one FK to posts. `!inner` is deliberately NOT used — inner would
   /// drop every post with zero of them.
-  static const postFields = 'id, body, image_path, video_path, thumbnail_path, created_at, '
+  static const postFields = 'id, author_id, body, image_path, video_path, thumbnail_path, created_at, '
       'profiles(first_name, last_name, role, avatar_path), '
       'post_reposts(count), reactions(count), comments(count)';
+
+  /// comments.author_id is the only FK from comments to profiles.
+  static const commentFields = 'id, body, created_at, author_id, profiles(first_name, last_name, avatar_path)';
 
   Future<List<Map<String, dynamic>>> fetchRecentPosts({int limit = 30}) async {
     final rows = await _client
@@ -144,5 +147,83 @@ class FeedService {
     }
     await repost(postId: postId, userId: userId);
     return true;
+  }
+
+  /// Post ids the signed-in user has liked, for the Like button's first paint.
+  Future<Set<String>> fetchMyReactedPostIds(String userId) async {
+    final rows = await _client.from('reactions').select('post_id').eq('author_id', userId);
+    return List<Map<String, dynamic>>.from(rows as List).map((r) => r['post_id'] as String).toSet();
+  }
+
+  /// reactions has UNIQUE (post_id, author_id), so a second like raises 23505,
+  /// which is already the state we want. notify_post_activity() tells the
+  /// post's author about a new like.
+  Future<bool> toggleReaction({
+    required String postId,
+    required String userId,
+    required bool currentlyReacted,
+  }) async {
+    if (currentlyReacted) {
+      await _client.from('reactions').delete().eq('post_id', postId).eq('author_id', userId);
+      return false;
+    }
+    try {
+      await _client.from('reactions').insert({'post_id': postId, 'author_id': userId});
+    } on PostgrestException catch (e) {
+      if (e.code != '23505') rethrow;
+    }
+    return true;
+  }
+
+  /// Oldest first, so a thread reads top to bottom.
+  Future<List<Map<String, dynamic>>> fetchComments(String postId) async {
+    final rows = await _client
+        .from('comments')
+        .select(commentFields)
+        .eq('post_id', postId)
+        .order('created_at');
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Returns the stored row, so an RLS or length-check rejection (migration
+  /// 032: 1 to 1000 characters) surfaces instead of looking like a success.
+  Future<Map<String, dynamic>> addComment({
+    required String postId,
+    required String authorId,
+    required String body,
+  }) async {
+    return await _client
+        .from('comments')
+        .insert({'post_id': postId, 'author_id': authorId, 'body': body})
+        .select(commentFields)
+        .single();
+  }
+
+  /// A delete that RLS filters to zero rows doesn't raise, so check the count.
+  Future<void> deleteComment(String commentId) async {
+    final rows = await _client.from('comments').delete().eq('id', commentId).select('id');
+    if ((rows as List).isEmpty) {
+      throw const PostgrestException(message: 'That comment could not be deleted.');
+    }
+  }
+
+  /// Feeds the web Moderation page. Migration 032 allows one pending report
+  /// per member per item, so a repeat report is already the state we want.
+  Future<void> reportContent({
+    required String contentType,
+    required String contentId,
+    required String reporterId,
+    required String reason,
+  }) async {
+    try {
+      await _client.from('content_reports').insert({
+        'content_type': contentType,
+        'content_id': contentId,
+        'reported_by': reporterId,
+        'reason': reason,
+      });
+    } on PostgrestException catch (e) {
+      if (e.code != '23505') rethrow;
+    }
   }
 }
