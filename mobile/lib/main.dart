@@ -40,6 +40,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'config/supabase_config.dart';
 import 'screens/edit_profile_screen.dart';
 import 'screens/forgot_password_screen.dart';
+import 'screens/privacy_settings_screen.dart';
 import 'services/auth_error_mapper.dart';
 import 'services/auth_service.dart';
 import 'services/jobs_service.dart';
@@ -924,6 +925,16 @@ void _openAccountMenu(BuildContext context, AuthService authService) {
               Navigator.pop(context);
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => AiAssistantScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.privacy_tip_outlined),
+            title: Text('Privacy & data'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => PrivacySettingsScreen()),
               );
             },
           ),
