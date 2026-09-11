@@ -59,6 +59,11 @@ import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
 import 'services/profile_context_service.dart';
+import 'screens/messages_screen.dart';
+import 'screens/network_screen.dart';
+import 'screens/notifications_screen.dart';
+import 'services/notifications_service.dart';
+import 'services/realtime_hub.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1159,10 +1164,22 @@ class RichfieldHeader extends StatelessWidget {
               color: AppColors.primary,
             ),
           ),
-          IconButton(
-            onPressed: () {},
-            icon: Icon(Icons.notifications_none_rounded),
-            color: AppColors.onSurface,
+          // Was IconButton(onPressed: () {}) — a bell that did nothing. The
+          // badge is RealtimeHub's unread count, updated over the WebSocket.
+          ValueListenableBuilder<int>(
+            valueListenable: RealtimeHub.instance.unreadNotifications,
+            builder: (context, unread, _) => IconButton(
+              tooltip: 'Notifications',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => NotificationsScreen()),
+              ),
+              icon: Badge(
+                isLabelVisible: unread > 0,
+                label: Text(unread > 99 ? '99+' : '$unread'),
+                child: Icon(Icons.notifications_none_rounded),
+              ),
+              color: AppColors.onSurface,
+            ),
           ),
           GestureDetector(
             onTap: onAvatarTap,
@@ -2596,6 +2613,8 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _index = 0;
 
+  static const _networkTab = 2;
+
   // Rubric Section 6, item 4: "First-time users receive an interactive
   // app tutorial." Before this, OnboardingTourOverlay only ever launched
   // manually from the account menu ("Take the Onboarding Tour") — nothing
@@ -2603,15 +2622,31 @@ class _RootShellState extends State<RootShell> {
   // that menu would never see it at all.
   static const _tourSeenKey = 'richfield_onboarding_tour_seen';
 
+  StreamSubscription<Map<String, dynamic>>? _alertSubscription;
+
   @override
   void initState() {
     super.initState();
+    // One realtime (WebSocket) channel for the signed-in user, shared by the
+    // Messages badge, the bell, open chats and the Network screen — see
+    // services/realtime_hub.dart. Released when go_router swaps the shell
+    // for the login screen on sign-out.
+    RealtimeHub.instance.retain();
+    _alertSubscription = RealtimeHub.instance.notifications.listen(_showInAppAlert);
+
     // addPostFrameCallback, not a direct call here: _startOnboardingTour
     // does Navigator.of(context).push(...), and calling that before this
     // widget's first frame has actually built is exactly the kind of
     // "Navigator operation requested with a context that does not
     // include a Navigator" crash this avoids.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTour());
+  }
+
+  @override
+  void dispose() {
+    _alertSubscription?.cancel();
+    RealtimeHub.instance.release();
+    super.dispose();
   }
 
   Future<void> _maybeShowTour() async {
@@ -2662,14 +2697,52 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
+  /// In-app alert for anything that arrives while the app is open
+  /// (guidelines 2.8). Skipped for a message from the person whose chat is
+  /// already on screen — the message appearing there is the alert.
+  void _showInAppAlert(Map<String, dynamic> row) {
+    if (!mounted) return;
+    final notification = AppNotification.fromRow(row);
+    if (notification.type == 'new_message' &&
+        notification.payload['sender_id'] == RealtimeHub.instance.activeChatPartnerId) {
+      return;
+    }
+    final text = notification.body.isEmpty
+        ? notification.title
+        : '${notification.title} — ${notification.body}';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 4),
+        content: Row(
+          children: [
+            Icon(notificationIcon(notification.type), size: 18, color: AppColors.inverseOnSurface),
+            SizedBox(width: AppSpace.sm),
+            Expanded(child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis)),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => openNotificationTarget(context, notification),
+        ),
+      ));
+  }
+
+  void _openMenu() => _openAccountMenu(context, widget.authService);
+
   List<Widget> get _screens => [
         widget.role == RichfieldRole.admin
-          ? AdminHubScreen()
+            ? AdminHubScreen()
             : widget.role == RichfieldRole.corporate
-            ? BusinessHubScreen()
+                ? BusinessHubScreen()
                 : FeedScreen(),
         JobsScreen(),
-        NetworkScreen(),
+        NetworkScreen(onAvatarTap: _openMenu),
+        MessagesScreen(
+          onAvatarTap: _openMenu,
+          onFindPeople: () => setState(() => _index = _networkTab),
+        ),
         PortfolioScreen(authService: widget.authService),
       ];
 
@@ -2677,20 +2750,31 @@ class _RootShellState extends State<RootShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(child: IndexedStack(index: _index, children: _screens)),
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _index,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.onSurfaceVariant,
-        selectedLabelStyle: AppText.labelMd(color: AppColors.primary),
-        unselectedLabelStyle: AppText.labelMd(color: AppColors.onSurfaceVariant),
-        onTap: (i) => setState(() => _index = i),
-        items: [
-          BottomNavigationBarItem(icon: Icon(Icons.dynamic_feed_outlined), label: 'Feed'),
-          BottomNavigationBarItem(icon: Icon(Icons.work_outline), label: 'Jobs'),
-          BottomNavigationBarItem(icon: Icon(Icons.hub_outlined), label: 'Network'),
-          BottomNavigationBarItem(icon: Icon(Icons.badge_outlined), label: 'Portfolio'),
-        ],
+      bottomNavigationBar: ValueListenableBuilder<int>(
+        valueListenable: RealtimeHub.instance.unreadMessages,
+        builder: (context, unread, _) => BottomNavigationBar(
+          type: BottomNavigationBarType.fixed,
+          currentIndex: _index,
+          selectedItemColor: AppColors.primary,
+          unselectedItemColor: AppColors.onSurfaceVariant,
+          selectedLabelStyle: AppText.labelMd(color: AppColors.primary),
+          unselectedLabelStyle: AppText.labelMd(color: AppColors.onSurfaceVariant),
+          onTap: (i) => setState(() => _index = i),
+          items: [
+            BottomNavigationBarItem(icon: Icon(Icons.dynamic_feed_outlined), label: 'Feed'),
+            BottomNavigationBarItem(icon: Icon(Icons.work_outline), label: 'Jobs'),
+            BottomNavigationBarItem(icon: Icon(Icons.hub_outlined), label: 'Network'),
+            BottomNavigationBarItem(
+              icon: Badge(
+                isLabelVisible: unread > 0,
+                label: Text(unread > 99 ? '99+' : '$unread'),
+                child: Icon(Icons.chat_bubble_outline),
+              ),
+              label: 'Messages',
+            ),
+            BottomNavigationBarItem(icon: Icon(Icons.badge_outlined), label: 'Portfolio'),
+          ],
+        ),
       ),
     );
   }
@@ -3998,128 +4082,9 @@ class _JobsScreenState extends State<JobsScreen> {
 }
 
 // =====================================================================
-// SECTION 10 — NETWORK SCREEN
-// (Also built to match the design system — no Stitch export provided.)
+// SECTION 10 — NETWORK SCREEN: now screens/network_screen.dart (real
+// connections, requests, suggestions and search).
 // =====================================================================
-
-class NetworkScreen extends StatelessWidget {
-  NetworkScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.only(bottom: 24),
-      children: [
-        RichfieldHeader(
-          title: 'Network',
-          subtitle: '482 CONNECTIONS',
-          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: TextField(
-            decoration: InputDecoration(
-              prefixIcon: Icon(Icons.search, size: 18),
-              hintText: 'Search students, alumni, recruiters…',
-              filled: true,
-              fillColor: AppColors.surfaceContainerLow,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: AppSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SectionHeader(title: 'People You May Know'),
-        ),
-        SizedBox(
-          height: 196,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-            itemCount: MockData.suggestions.length,
-            separatorBuilder: (_, __) => SizedBox(width: AppSpace.sm),
-            itemBuilder: (_, i) {
-              final s = MockData.suggestions[i];
-              return SizedBox(
-                width: 150,
-                child: RoundedCard(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      InitialsAvatar(initials: s.initials, radius: 24),
-                      SizedBox(height: AppSpace.sm),
-                      Text(s.name,
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.labelMd()),
-                      SizedBox(height: 2),
-                      Text(s.subtitle,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                      Spacer(),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton(
-                          onPressed: () {},
-                          style: OutlinedButton.styleFrom(
-                            padding: EdgeInsets.symmetric(vertical: 6),
-                            side: BorderSide(color: AppColors.primary),
-                          ),
-                          child: Text('Connect', style: AppText.labelMd(color: AppColors.primary)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(height: AppSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SectionHeader(title: 'Pending Requests'),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: RoundedCard(
-            child: Row(
-              children: [
-                InitialsAvatar(initials: 'ZM'),
-                SizedBox(width: AppSpace.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Zanele Mokoena', style: AppText.labelLg()),
-                      Text('BCom Accounting • Class of 2026',
-                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.close, color: AppColors.onSurfaceVariant),
-                ),
-                IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.check_circle, color: AppColors.successGreen),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 // =====================================================================
 // SECTION 11 — PORTFOLIO SCREEN (most detailed — 1:1 with code.html)
