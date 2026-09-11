@@ -11,7 +11,7 @@ import '../services/privacy_service.dart';
 
 const aiProcessingExplanation =
     'The assistant sends your profile summary (such as your name, headline, bio, career interests, '
-    'skills, education, experience and projects) and whatever you type or paste, such as a CV, '
+    'skills, education, experience and projects) and whatever you type, paste or upload, such as a CV, '
     'through Richfield Connect\'s AI server to Google\'s Gemini service. Google may process it '
     'outside South Africa.';
 

@@ -15,6 +15,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -63,6 +64,9 @@ class AiService {
   /// tunnel from hanging a screen forever instead of surfacing an error.
   static const _timeout = Duration(seconds: 30);
 
+  /// Gemini reading a whole PDF takes noticeably longer than a chat reply.
+  static const _pdfTimeout = Duration(seconds: 60);
+
   /// ngrok's free tier occasionally serves an HTML interstitial warning
   /// page instead of proxying the request straight through. This header
   /// skips it. Harmless no-op against any other host.
@@ -80,6 +84,22 @@ class AiService {
   /// forward this map into a single profiles update.
   Future<Map<String, dynamic>> parseCv(String cvText) {
     return _post('/api/parse-cv', {'cv_text': cvText});
+  }
+
+  /// [parseCv] for a PDF instead of text: same response shape. Sent as
+  /// multipart/form-data field "file"; Gemini reads the PDF itself, so there
+  /// is no text extraction on the phone and scanned CVs work too. The
+  /// service rejects anything that isn't a PDF or is over 5 MB.
+  Future<Map<String, dynamic>> parseCvPdf({required Uint8List bytes, required String fileName}) {
+    return _dispatch(
+      (baseUrl) async {
+        final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/parse-cv'))
+          ..headers['ngrok-skip-browser-warning'] = 'true'
+          ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+        return http.Response.fromStream(await request.send());
+      },
+      timeout: _pdfTimeout,
+    );
   }
 
   /// POSTs {message, user_profile, history, mode} to /api/chat and returns
@@ -135,27 +155,45 @@ class AiService {
     }
   }
 
-  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> payload) async {
-    if (_baseUrlOverride == null && !AiConfig.isConfigured) {
-      throw AiServiceException(
-        'The AI server address hasn\'t been set. Add it under "AI server address".',
-      );
+  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> payload) {
+    return _dispatch(
+      (baseUrl) => http.post(Uri.parse('$baseUrl$path'), headers: _headers, body: jsonEncode(payload)),
+    );
+  }
+
+  /// Shared by JSON and multipart requests: resolves the address, applies
+  /// the timeout and turns every failure into an [AiServiceException].
+  Future<Map<String, dynamic>> _dispatch(
+    Future<http.Response> Function(String baseUrl) send, {
+    Duration timeout = _timeout,
+  }) async {
+    if (_baseUrlOverride == null) {
+      // app_config (migration 035) is how a build with no --dart-define,
+      // like Keshav's QA build, learns the address at all.
+      await AiConfig.refreshRemote();
+      if (!AiConfig.isConfigured) {
+        throw AiServiceException(
+          'The AI assistant isn\'t connected: no server address has been published yet. '
+          'Ask a Richfield administrator, or add one under "AI server address".',
+        );
+      }
     }
 
     http.Response res;
     try {
-      res = await http
-          .post(Uri.parse('$_baseUrl$path'), headers: _headers, body: jsonEncode(payload))
-          .timeout(_timeout);
+      res = await send(_baseUrl).timeout(timeout);
     } on TimeoutException {
+      // The tunnel may have moved; read app_config again on the next try.
+      AiConfig.invalidateRemote();
       throw AiServiceException(
         'The AI assistant took too long to respond. It may be offline — try again in a moment.',
       );
     } catch (e) {
       // Covers SocketException (host unreachable / DNS failure / tunnel
-      // dead) and anything else http.post itself can throw. Deliberately
+      // dead) and anything else the request itself can throw. Deliberately
       // broad: every one of these means "couldn't reach the service,"
       // and the user doesn't need the exact Dart exception type to act on it.
+      AiConfig.invalidateRemote();
       throw AiServiceException(
         'Couldn\'t reach the AI assistant. The server may be offline or its address may have changed.',
       );

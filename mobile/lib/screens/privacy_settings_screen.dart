@@ -446,7 +446,7 @@ class _PopiaNotice extends StatelessWidget {
       'Where it is processed',
       'Your information is stored with Supabase in Frankfurt, Germany. Emails are sent through Resend and push '
           'notifications through Google Firebase. If you allow the Career AI assistant, your profile summary '
-          'and what you type or paste into it are sent to Google\'s Gemini service. These providers may '
+          'and what you type, paste or upload into it are sent to Google\'s Gemini service. These providers may '
           'process information outside South Africa.',
     ),
     (

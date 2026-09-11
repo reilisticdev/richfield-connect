@@ -799,7 +799,8 @@ class _ServerDialogState extends State<_ServerDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'The assistant runs on a separate service. If its tunnel restarted, paste the new address here.',
+            'The assistant normally uses the address Richfield publishes for everyone. An address saved '
+            'here overrides it on this device only; Reset goes back to the published one.',
             style: AppText.bodySm(color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpace.md),

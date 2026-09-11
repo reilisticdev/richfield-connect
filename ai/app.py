@@ -28,6 +28,12 @@ MAX_TURN_CHARS = 4000
 app = Flask(__name__)
 CORS(app)
 
+# CV PDFs are usually a few hundred KB; 5 MB leaves room for scanned ones.
+# MAX_CONTENT_LENGTH makes Flask refuse a larger body before reading it (the
+# 413 handler below keeps that response JSON, like every other error here).
+MAX_CV_PDF_BYTES = 5 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_CV_PDF_BYTES + 64 * 1024
+
 _client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
@@ -91,24 +97,45 @@ def health():
     )
 
 
+CV_EXTRACTION_PROMPT = (
+    "Extract structured profile information from this CV/resume. If a field "
+    "genuinely cannot be determined, use null (for the name fields) or an empty "
+    "array/string as appropriate - never invent information that isn't actually "
+    "present in the CV."
+)
+
+
 @app.post("/api/parse-cv")
 def parse_cv():
-    data = request.get_json(silent=True) or {}
-    cv_text = data.get("cv_text")
-    if not isinstance(cv_text, str) or not cv_text.strip():
-        return jsonify(error="cv_text is required and must be a non-empty string"), 400
+    """Takes a PDF upload (multipart/form-data, field "file") or JSON
+    {"cv_text": "..."}. Gemini reads the PDF directly, so the app does no text
+    extraction and scanned CVs work too. Nothing is stored."""
+    upload = request.files.get("file")
+    if upload is not None:
+        pdf_bytes = upload.read()
+        if not pdf_bytes:
+            return jsonify(error="The uploaded file is empty"), 400
+        if len(pdf_bytes) > MAX_CV_PDF_BYTES:
+            return jsonify(error="CV PDFs must be 5 MB or smaller"), 413
+        # Trust the bytes, not the filename or the client's content type.
+        if not pdf_bytes.startswith(b"%PDF-"):
+            return jsonify(error="Only PDF files are supported"), 400
+        contents = [
+            types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+            CV_EXTRACTION_PROMPT,
+        ]
+    else:
+        data = request.get_json(silent=True) or {}
+        cv_text = data.get("cv_text")
+        if not isinstance(cv_text, str) or not cv_text.strip():
+            return jsonify(error="Send a PDF as 'file' or a non-empty 'cv_text' string"), 400
+        contents = f"{CV_EXTRACTION_PROMPT}\n\nCV TEXT:\n{cv_text}"
 
     try:
         client = _require_client()
         response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=(
-                "Extract structured profile information from the following CV/resume "
-                "text. If a field genuinely cannot be determined, use null (for the name "
-                "fields) or an empty array/string as appropriate - never invent "
-                "information that isn't actually present in the text.\n\n"
-                f"CV TEXT:\n{cv_text}"
-            ),
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=ParsedCV,
@@ -260,6 +287,11 @@ def not_found(_e):
 @app.errorhandler(405)
 def method_not_allowed(_e):
     return jsonify(error="Method not allowed"), 405
+
+
+@app.errorhandler(413)
+def payload_too_large(_e):
+    return jsonify(error="That upload is too large. CV PDFs must be 5 MB or smaller"), 413
 
 
 if __name__ == "__main__":
