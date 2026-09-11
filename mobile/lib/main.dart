@@ -389,11 +389,11 @@ extension RichfieldRoleX on RichfieldRole {
       case RichfieldRole.student:
         return '@my.richfield.ac.za';
       case RichfieldRole.alumni:
-        return 'Verified Graduate';
+        return 'Richfield graduate';
       case RichfieldRole.corporate:
         return 'Partner Recruiter';
       case RichfieldRole.admin:
-        return 'Gateway Portal';
+        return 'Richfield staff';
     }
   }
 
@@ -1239,7 +1239,6 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   RichfieldRole _selectedRole = RichfieldRole.student;
   bool _obscure = true;
-  bool _trustDevice = true;
   bool _submitting = false;
   String? _errorMessage;
   final _emailController = TextEditingController();
@@ -1283,30 +1282,10 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              RoundedCard(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                color: AppColors.onPrimaryContainer.withOpacity(0.3),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    Icon(Icons.lock_outline, size: 18, color: AppColors.primary),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Richfield Secure Vault Initialising…', style: AppText.labelMd()),
-                          Text('256-Bit Hardware Handshake',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Text('VAULT ONLINE',
-                        style: AppText.labelBadge(color: AppColors.primary)),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.xl),
+              // A "Richfield Secure Vault Initialising… / 256-Bit Hardware
+              // Handshake / VAULT ONLINE" banner sat here. It was decoration:
+              // sign-in is Supabase email and password over HTTPS.
+              SizedBox(height: AppSpace.lg),
               Center(
                 child: Container(
                   width: 72,
@@ -1343,20 +1322,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     foreground: AppColors.tertiary,
                     icon: Icons.school_outlined,
                   ),
-                  SizedBox(width: AppSpace.sm),
-                  Pill(
-                    text: '256-Bit Vault',
-                    background: AppColors.errorContainer,
-                    foreground: AppColors.error,
-                    icon: Icons.shield_outlined,
-                  ),
                 ],
               ),
               SizedBox(height: AppSpace.xl),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Select Access', style: AppText.labelLg()),
+                  Text('Account type', style: AppText.labelLg()),
                   Text('TAP TO SWITCH',
                       style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
                 ],
@@ -1391,10 +1363,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Student Domain Policy', style: AppText.labelMd()),
+                          Text('Student email policy', style: AppText.labelMd()),
                           SizedBox(height: 2),
                           Text(
-                            'Direct instant sign-in requires an authentic institutional inbox (@my.richfield.ac.za or @my.aaa.ac.za).',
+                            'Student accounts are registered with a Richfield or AAA address: @my.richfield.ac.za, @richfield.ac.za, @my.aaa.ac.za or @aaa.ac.za.',
                             style: AppText.bodySm(color: AppColors.onSurfaceVariant),
                           ),
                         ],
@@ -1403,31 +1375,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   ],
                 ),
               ),
-              SizedBox(height: AppSpace.base),
-              OutlinedButton.icon(
-                onPressed: _signIn,
-                icon: Icon(Icons.g_mobiledata, size: 28, color: AppColors.onSurface),
-                label: Text('Continue with Institutional Google', style: AppText.labelLg()),
-                style: OutlinedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(vertical: 14),
-                  side: BorderSide(color: AppColors.outlineVariant),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                  ),
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              Row(
-                children: [
-                  Expanded(child: Divider(color: AppColors.outlineVariant)),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('OR CREDENTIALS LOGIN',
-                        style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-                  ),
-                  Expanded(child: Divider(color: AppColors.outlineVariant)),
-                ],
-              ),
+              // "Continue with Institutional Google" was here, wired to the
+              // same email/password _signIn as the form below. Google isn't
+              // enabled as a Supabase Auth provider, so it can't be real yet.
               SizedBox(height: AppSpace.base),
                 Text(_selectedRole == RichfieldRole.corporate
                   ? 'Work Email'
@@ -1440,23 +1390,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.alternate_email, size: 18),
-                    hintText: _selectedRole == RichfieldRole.corporate
-                      ? 'name@company.co.za'
-                      : _selectedRole == RichfieldRole.admin
-                        ? 'admin@richfield.ac.za'
-                        : 'student.id',
-                  suffixIcon: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                    child: Pill(
-                        text: _selectedRole == RichfieldRole.corporate
-                          ? 'WORK EMAIL'
-                          : _selectedRole == RichfieldRole.admin
-                            ? '@richfield.ac.za'
-                            : '@my.richfield',
-                      background: AppColors.surfaceContainerHigh,
-                      foreground: AppColors.onSurfaceVariant,
-                    ),
-                  ),
+                  // The full address is what signs you in. The old hint,
+                  // 'student.id' beside a '@my.richfield' pill, suggested the
+                  // domain gets filled in for you; it doesn't.
+                  hintText: switch (_selectedRole) {
+                    RichfieldRole.corporate => 'you@company.co.za',
+                    RichfieldRole.admin => 'you@richfield.ac.za',
+                    RichfieldRole.alumni => 'you@example.com',
+                    RichfieldRole.student => 'you@my.richfield.ac.za',
+                  },
                   filled: true,
                   fillColor: AppColors.surfaceContainerLow,
                   border: OutlineInputBorder(
@@ -1469,7 +1411,7 @@ class _LoginScreenState extends State<LoginScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Network', style: AppText.labelLg()),
+                  Text('Password', style: AppText.labelLg()),
                   // Was a bare Text() styled to look like a link — no
                   // GestureDetector, no InkWell, no route. Nothing to tap.
                   TextButton(
@@ -1510,16 +1452,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
               ),
-              SizedBox(height: AppSpace.sm),
-              CheckboxListTile(
-                value: _trustDevice,
-                onChanged: (v) => setState(() => _trustDevice = v ?? true),
-                controlAffinity: ListTileControlAffinity.leading,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text('Trust this device for 30 days via Richfield Mobile Token',
-                    style: AppText.bodySm()),
-              ),
+              // A "Trust this device for 30 days via Richfield Mobile Token"
+              // checkbox was here, bound to a bool nothing read. Sessions
+              // already persist until sign-out.
+              SizedBox(height: AppSpace.md),
               if (_errorMessage != null) ...[
                 Padding(
                   padding: EdgeInsets.only(bottom: AppSpace.sm),
@@ -1528,7 +1464,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
               SizedBox(height: AppSpace.sm),
               PrimaryButton(
-                label: _submitting ? 'SIGNING IN…' : 'SIGN IN AS ${_selectedRole.label.toUpperCase()}',
+                // The account-type tiles only change the hints; the account's
+                // real role comes from its profile after sign-in.
+                label: _submitting ? 'SIGNING IN…' : 'SIGN IN',
                 icon: Icons.key_outlined,
                 onPressed: _submitting ? null : _signIn,
               ),
@@ -1621,24 +1559,53 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _agreed = false;
   bool _submitting = false;
   String? _errorMessage;
+
+  /// Set when signUp succeeds without a session, which is always the case
+  /// while email confirmation is on. The form used to stay on screen with no
+  /// sign that anything had happened, because go_router only redirects once a
+  /// session exists.
+  String? _confirmationSentTo;
+
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _programmeController = TextEditingController();
+  final _studentNumberController = TextEditingController();
+  final _enrolmentYearController = TextEditingController();
+  final _graduationYearController = TextEditingController();
+  final _companyNameController = TextEditingController();
+  final _industryController = TextEditingController();
+  final _locationController = TextEditingController();
 
   static final _tabs = ['Student', 'Alumni', 'Employer'];
   static final _tabIcons = [Icons.school_outlined, Icons.workspace_premium_outlined, Icons.apartment_outlined];
 
-  // No campuses lookup table exists in the DB (campus is a free-text
-  // column elsewhere in the schema) and the selection isn't persisted on
-  // signup yet — this list only makes the dropdown itself functional.
+  // No campuses lookup table exists (education.campus is free text). A fixed
+  // list keeps the spelling consistent, which matters now that the campus is
+  // saved and programme comparisons group students by what they entered.
   static const _campuses = ['Braamfontein', 'Cape Town', 'Durban', 'Pretoria', 'Nelspruit', 'Vereeniging'];
   String _campus = _campuses.first;
 
+  static final _fourDigits = RegExp(r'^\d{4}$');
+
+  List<TextEditingController> get _controllers => [
+        _fullNameController,
+        _emailController,
+        _passwordController,
+        _programmeController,
+        _studentNumberController,
+        _enrolmentYearController,
+        _graduationYearController,
+        _companyNameController,
+        _industryController,
+        _locationController,
+      ];
+
   @override
   void dispose() {
-    _fullNameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
+    for (final controller in _controllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -1656,28 +1623,111 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  String _text(TextEditingController controller) => controller.text.trim();
+
+  String? _yearProblem(String label, TextEditingController controller, {required bool required}) {
+    final value = _text(controller);
+    if (value.isEmpty) return required ? '$label is required.' : null;
+    final year = int.tryParse(value);
+    final latest = DateTime.now().year + 8;
+    if (!_fourDigits.hasMatch(value) || year == null || year < 1970 || year > latest) {
+      return '$label must be a year between 1970 and $latest.';
+    }
+    return null;
+  }
+
+  String? _yearOrderProblem() {
+    final started = int.tryParse(_text(_enrolmentYearController));
+    final graduated = int.tryParse(_text(_graduationYearController));
+    if (started != null && graduated != null && graduated < started) {
+      return "Graduation year can't be before the year you started.";
+    }
+    return null;
+  }
+
+  /// The first thing missing or invalid for the selected account type. The
+  /// required fields are the ones migration 028 needs to create the row: a
+  /// student's education (programme, campus, start year), an alumnus's
+  /// verification claim (student number, programme, campus, graduation year)
+  /// and a business profile (company name).
+  String? _validate() {
+    if (_text(_fullNameController).isEmpty) return 'Enter your full name.';
+    if (_text(_emailController).isEmpty) return 'Enter your email address.';
+    switch (_tab) {
+      case 0:
+        if (_text(_programmeController).isEmpty) return 'Enter your programme.';
+        return _yearProblem('Year started', _enrolmentYearController, required: true) ??
+            _yearProblem('Graduation year', _graduationYearController, required: false) ??
+            _yearOrderProblem();
+      case 1:
+        if (_text(_studentNumberController).isEmpty) return 'Enter the student number you studied under.';
+        if (_text(_programmeController).isEmpty) return 'Enter the programme you completed.';
+        return _yearProblem('Year started', _enrolmentYearController, required: false) ??
+            _yearProblem('Graduation year', _graduationYearController, required: true) ??
+            _yearOrderProblem();
+      default:
+        if (_text(_companyNameController).isEmpty) return 'Enter your company name.';
+        return null;
+    }
+  }
+
+  /// Only the fields this account type's form shows, and only filled-in ones.
+  Map<String, Object> _details() {
+    final details = <String, Object>{'registration_consent': true};
+    void put(String key, TextEditingController controller) {
+      final value = _text(controller);
+      if (value.isNotEmpty) details[key] = value;
+    }
+
+    if (_tab == 2) {
+      put('company_name', _companyNameController);
+      put('industry', _industryController);
+      put('location', _locationController);
+    } else {
+      put('programme', _programmeController);
+      details['campus'] = _campus;
+      put('enrolment_year', _enrolmentYearController);
+      put('graduation_year', _graduationYearController);
+      if (_tab == 1) put('student_number', _studentNumberController);
+    }
+    return details;
+  }
+
   Future<void> _submit() async {
-    // Naive split of "Full Legal Name" into first/last on the first space —
+    final problem = _validate();
+    if (problem != null) {
+      setState(() => _errorMessage = problem);
+      return;
+    }
+
+    // Naive split of "Full name" into first/last on the first space —
     // a hackathon-pace shortcut, not a real name-parsing solution.
-    final fullName = _fullNameController.text.trim();
+    final fullName = _text(_fullNameController);
     final spaceIndex = fullName.indexOf(' ');
     final firstName = spaceIndex == -1 ? (fullName.isEmpty ? null : fullName) : fullName.substring(0, spaceIndex);
     final lastName = spaceIndex == -1 ? null : fullName.substring(spaceIndex + 1).trim();
+    final email = _text(_emailController);
 
     setState(() {
       _submitting = true;
       _errorMessage = null;
     });
     try {
-      await widget.authService.signUp(
-        email: _emailController.text.trim(),
+      final response = await widget.authService.signUp(
+        email: email,
         password: _passwordController.text,
         role: _signupRole,
         firstName: firstName,
         lastName: lastName,
+        details: _details(),
       );
+      // A session only comes back if email confirmation is switched off, in
+      // which case go_router's redirect takes over on its own.
+      if (response.session == null && mounted) {
+        setState(() => _confirmationSentTo = email);
+      }
     } catch (e) {
-      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+      if (mounted) setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -1685,6 +1735,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final confirmationSentTo = _confirmationSentTo;
     return Scaffold(
       backgroundColor: AppColors.surfaceContainerLow,
       appBar: AppBar(
@@ -1696,241 +1747,283 @@ class _RegisterScreenState extends State<RegisterScreen> {
         top: false,
         child: SingleChildScrollView(
           padding: EdgeInsets.all(AppSpace.base),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+          child: confirmationSentTo == null ? _form() : _confirmationView(confirmationSentTo),
+        ),
+      ),
+    );
+  }
+
+  Widget _confirmationView(String email) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: AppSpace.xl),
+        Icon(Icons.mark_email_read_outlined, size: 56, color: AppColors.primary),
+        SizedBox(height: AppSpace.md),
+        Text('Check your inbox', textAlign: TextAlign.center, style: AppText.headlineLg()),
+        SizedBox(height: AppSpace.sm),
+        Text(
+          'We sent a confirmation link to $email. Open it, then come back and sign in.',
+          textAlign: TextAlign.center,
+          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+        ),
+        if (_tab != 0) ...[
+          SizedBox(height: AppSpace.md),
+          RoundedCard(
+            child: Text(
+              _tab == 1
+                  ? 'After you confirm, a Richfield administrator checks your student number and graduation details. You can use the app once they approve your account.'
+                  : 'After you confirm, a Richfield administrator reviews your company. You can use the app once they approve your account.',
+              style: AppText.bodyMd(),
+            ),
+          ),
+        ],
+        SizedBox(height: AppSpace.lg),
+        PrimaryButton(
+          label: 'Back to sign in',
+          icon: Icons.login,
+          onPressed: () => context.go('/login'),
+        ),
+      ],
+    );
+  }
+
+  String get _howItWorks => switch (_tab) {
+        1 => 'A Richfield administrator checks your student number and graduation year before your account is activated.',
+        2 => 'A Richfield administrator reviews your company before your account is activated.',
+        _ => 'Confirm your student email from your inbox, then sign in. There is no approval step.',
+      };
+
+  String get _consentText {
+    final review = switch (_tab) {
+      1 => ', and to a Richfield administrator checking my student details',
+      2 => ', and to a Richfield administrator reviewing my company details',
+      _ => '',
+    };
+    return 'I consent to Richfield Connect storing the details above to run my account and show my profile to other members$review, in line with POPIA.';
+  }
+
+  Widget _form() {
+    final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
+    final (emailLabel, emailHint, emailNote) = switch (_tab) {
+      1 => ('Email address', 'you@example.com', 'Any address you check. You don\'t need your old student inbox.'),
+      2 => ('Work email', 'you@company.co.za', 'Use your company address so the administrator can see who you work for.'),
+      _ => (
+          'Student email',
+          'you@my.richfield.ac.za',
+          'Must end in @my.richfield.ac.za, @richfield.ac.za, @my.aaa.ac.za or @aaa.ac.za.',
+        ),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('RICHFIELD GRADUATE NETWORK',
-                            style: AppText.labelBadge(color: AppColors.primary)),
-                        Text('Join the Talent Nexus', style: AppText.headlineLg()),
-                      ],
-                    ),
-                  ),
-                  Pill(
-                    text: 'ACCREDITED',
-                    background: AppColors.successGreenBg,
-                    foreground: AppColors.successGreen,
-                  ),
+                  Text('RICHFIELD GRADUATE NETWORK',
+                      style: AppText.labelBadge(color: AppColors.primary)),
+                  Text('Join the Talent Nexus', style: AppText.headlineLg()),
                 ],
               ),
-              SizedBox(height: AppSpace.sm),
-              Text(
-                'Verify your institutional credentials to connect directly with premier South African corporate recruiters and alumni circles.',
-                style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                padding: EdgeInsets.all(4),
-                border: Border.all(color: Colors.transparent),
-                color: AppColors.surfaceContainerHigh.withOpacity(0.5),
-                child: Row(
-                  children: List.generate(_tabs.length, (i) {
-                    final selected = _tab == i;
-                    return Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() => _tab = i),
-                        child: Container(
-                          padding: EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: selected ? AppColors.surfaceContainerLowest : Colors.transparent,
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                          ),
-                          child: Column(
-                            children: [
-                              Icon(_tabIcons[i],
-                                  size: 18,
-                                  color: selected ? AppColors.primary : AppColors.onSurfaceVariant),
-                              SizedBox(height: 2),
-                              Text(_tabs[i],
-                                  style: AppText.labelMd(
-                                      color: selected ? AppColors.primary : AppColors.onSurfaceVariant)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
+            ),
+            Pill(
+              text: 'ACCREDITED',
+              background: AppColors.successGreenBg,
+              foreground: AppColors.successGreen,
+            ),
+          ],
+        ),
+        SizedBox(height: AppSpace.sm),
+        Text(
+          'Build a portfolio, find internships and graduate roles, and connect with Richfield alumni and recruiters.',
+          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+        ),
+        SizedBox(height: AppSpace.base),
+        RoundedCard(
+          padding: EdgeInsets.all(4),
+          border: Border.all(color: Colors.transparent),
+          color: AppColors.surfaceContainerHigh.withOpacity(0.5),
+          child: Row(
+            children: List.generate(_tabs.length, (i) {
+              final selected = _tab == i;
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _tab = i;
+                    _errorMessage = null;
                   }),
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.secondaryContainer.withOpacity(0.2),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppColors.secondary,
-                        borderRadius: BorderRadius.circular(AppRadius.md),
-                      ),
-                      child: Icon(Icons.school_outlined, color: Colors.white, size: 18),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: selected ? AppColors.surfaceContainerLowest : Colors.transparent,
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                     ),
-                    SizedBox(width: AppSpace.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('${_tabs[_tab]} Registration', style: AppText.labelLg()),
-                          Text('Instant institutional database match via student email',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Pill(
-                      text: 'ID VERIFIED',
-                      background: AppColors.surfaceContainerLowest,
-                      foreground: AppColors.onSurfaceVariant,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              _labeledField('Full Legal Name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
-                  controller: _fullNameController),
-              SizedBox(height: AppSpace.md),
-              if (_tab != 2) ...[
-                _labeledField('Student Number', '202209148', Icons.badge_outlined),
-                SizedBox(height: AppSpace.md),
-              ],
-                Text(_tab == 2 ? 'Business Work Email' : 'Mandatory Institutional Email',
-                  style: AppText.labelLg()),
-              SizedBox(height: 6),
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.alternate_email, size: 18),
-                  hintText: _tab == 2 ? 'recruiter@company.co.za' : 's.dlamini22',
-                  suffixIcon: Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Pill(
-                      text: _tab == 2 ? 'WORK EMAIL' : '@my.richfield.ac.za',
-                      background: AppColors.surfaceContainerHigh,
-                      foreground: AppColors.onSurfaceVariant,
-                      fontSize: 9,
-                    ),
-                  ),
-                  filled: true,
-                  fillColor: AppColors.surfaceContainerLowest,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                    borderSide: BorderSide(color: AppColors.outlineVariant),
-                  ),
-                ),
-              ),
-              SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(Icons.lock_outline, size: 12, color: AppColors.onSurfaceVariant),
-                  SizedBox(width: 4),
-                  Text('Domain suffix locked to accredited campus portals',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                ],
-              ),
-              SizedBox(height: AppSpace.md),
-              _tab == 2
-                  ? _labeledField('Company Location', 'Sandton, Johannesburg', Icons.location_on_outlined)
-                  : Row(
+                    child: Column(
                       children: [
-                        Expanded(child: _campusDropdown()),
-                        SizedBox(width: AppSpace.sm),
-                        Expanded(child: _labeledField('Expected Year', '2025', Icons.calendar_today_outlined)),
+                        Icon(_tabIcons[i],
+                            size: 18,
+                            color: selected ? AppColors.primary : AppColors.onSurfaceVariant),
+                        SizedBox(height: 2),
+                        Text(_tabs[i],
+                            style: AppText.labelMd(
+                                color: selected ? AppColors.primary : AppColors.onSurfaceVariant)),
                       ],
                     ),
-              SizedBox(height: AppSpace.md),
-              _tab == 2
-                  ? _labeledField('Industry / Talent Focus', 'Software engineering and data', Icons.business_center_outlined)
-                  : _labeledField('Faculty / Programme', 'BSc Information Technology', Icons.school_outlined),
-              SizedBox(height: AppSpace.md),
-              _labeledField('Password', 'At least 8 characters', Icons.lock_outline,
-                  controller: _passwordController, obscureText: true),
-              SizedBox(height: AppSpace.base),
-              CheckboxListTile(
-                value: _agreed,
-                onChanged: (v) => setState(() => _agreed = v ?? false),
-                controlAffinity: ListTileControlAffinity.leading,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text.rich(
-                  TextSpan(
-                    style: AppText.bodySm(),
-                    children: [
-                      TextSpan(text: 'I agree to the '),
-                      TextSpan(
-                        text: 'Richfield Network POPIA Terms',
-                        style: AppText.bodySm(color: AppColors.primary),
-                      ),
-                      TextSpan(
-                          text: ' and consent to cross-matching my identity with institutional registrar databases.'),
-                    ],
                   ),
                 ),
-              ),
-              if (_errorMessage != null) ...[
-                Padding(
-                  padding: EdgeInsets.only(bottom: AppSpace.sm),
-                  child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+              );
+            }),
+          ),
+        ),
+        SizedBox(height: AppSpace.base),
+        // Was "Instant institutional database match via student email" with
+        // an 'ID VERIFIED' pill. No such lookup exists; this says what does
+        // happen for each account type.
+        RoundedCard(
+          color: AppColors.secondaryContainer.withOpacity(0.2),
+          border: Border.all(color: Colors.transparent),
+          child: Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
                 ),
-              ],
-              SizedBox(height: AppSpace.sm),
-              PrimaryButton(
-                label: _submitting ? 'Creating account…' : 'Create Verified ${_tabs[_tab]} Account',
-                icon: Icons.how_to_reg_outlined,
-                onPressed: (_agreed && !_submitting) ? _submit : null,
+                child: Icon(_tabIcons[_tab], color: Colors.white, size: 18),
               ),
-              SizedBox(height: AppSpace.sm),
-              Center(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.lock_outline, size: 12, color: AppColors.successGreen),
-                    SizedBox(width: 4),
-                    Text('Supabase Auth Ready for Backend Integration',
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.tertiaryContainer.withOpacity(0.15),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: AppColors.tertiaryFixed,
-                      child: Text('92%', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700)),
-                    ),
-                    SizedBox(width: AppSpace.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Graduate Placement Index', style: AppText.labelMd()),
-                          Text('Class of 2024 placed within 6 months',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.trending_up, color: AppColors.successGreen),
+                    Text('${_tabs[_tab]} registration', style: AppText.labelLg()),
+                    Text(_howItWorks, style: muted),
                   ],
                 ),
               ),
             ],
           ),
         ),
-      ),
+        SizedBox(height: AppSpace.base),
+        _labeledField('Full name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
+            controller: _fullNameController),
+        SizedBox(height: AppSpace.md),
+        ..._accountTypeFields(),
+        Text(emailLabel, style: AppText.labelLg()),
+        SizedBox(height: 6),
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          autocorrect: false,
+          decoration: InputDecoration(
+            prefixIcon: Icon(Icons.alternate_email, size: 18),
+            hintText: emailHint,
+            filled: true,
+            fillColor: AppColors.surfaceContainerLowest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              borderSide: BorderSide(color: AppColors.outlineVariant),
+            ),
+          ),
+        ),
+        SizedBox(height: 4),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(_tab == 0 ? Icons.lock_outline : Icons.info_outline, size: 12, color: AppColors.onSurfaceVariant),
+            SizedBox(width: 4),
+            Expanded(child: Text(emailNote, style: muted)),
+          ],
+        ),
+        SizedBox(height: AppSpace.md),
+        _labeledField('Password', 'At least 8 characters', Icons.lock_outline,
+            controller: _passwordController, obscureText: true),
+        SizedBox(height: AppSpace.base),
+        // The old text also consented to "cross-matching my identity with
+        // institutional registrar databases", which nothing does.
+        CheckboxListTile(
+          value: _agreed,
+          onChanged: (v) => setState(() => _agreed = v ?? false),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text(_consentText, style: AppText.bodySm()),
+        ),
+        if (_errorMessage != null) ...[
+          Padding(
+            padding: EdgeInsets.only(bottom: AppSpace.sm),
+            child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+          ),
+        ],
+        SizedBox(height: AppSpace.sm),
+        PrimaryButton(
+          label: _submitting ? 'Creating account…' : 'Create ${_tabs[_tab].toLowerCase()} account',
+          icon: Icons.how_to_reg_outlined,
+          onPressed: (_agreed && !_submitting) ? _submit : null,
+        ),
+        SizedBox(height: AppSpace.base),
+      ],
     );
   }
 
+  /// Student and alumni fields become an education row (and, for alumni, the
+  /// verification claim an administrator approves); employer fields become the
+  /// business profile. All of these used to be discarded on submit.
+  List<Widget> _accountTypeFields() {
+    Widget gap() => SizedBox(height: AppSpace.md);
+
+    if (_tab == 2) {
+      return [
+        _labeledField('Company name', 'e.g. Acme Digital (Pty) Ltd', Icons.apartment_outlined,
+            controller: _companyNameController),
+        gap(),
+        _labeledField('Industry (optional)', 'Software engineering and data', Icons.business_center_outlined,
+            controller: _industryController),
+        gap(),
+        _labeledField('Company location (optional)', 'Sandton, Johannesburg', Icons.location_on_outlined,
+            controller: _locationController),
+        gap(),
+      ];
+    }
+
+    final alumni = _tab == 1;
+    return [
+      if (alumni) ...[
+        _labeledField('Student number', 'The number you studied under', Icons.badge_outlined,
+            controller: _studentNumberController),
+        gap(),
+      ],
+      _labeledField(alumni ? 'Programme completed' : 'Programme', 'BSc Information Technology', Icons.school_outlined,
+          controller: _programmeController),
+      gap(),
+      _campusDropdown(),
+      gap(),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', '2024', Icons.event_outlined,
+                controller: _enrolmentYearController, keyboardType: TextInputType.number),
+          ),
+          SizedBox(width: AppSpace.sm),
+          Expanded(
+            child: _labeledField(alumni ? 'Graduation year' : 'Graduating (optional)', alumni ? '2021' : '2027',
+                Icons.calendar_today_outlined,
+                controller: _graduationYearController, keyboardType: TextInputType.number),
+          ),
+        ],
+      ),
+      gap(),
+    ];
+  }
+
   Widget _labeledField(String label, String hint, IconData icon,
-      {TextEditingController? controller, bool obscureText = false}) {
+      {TextEditingController? controller, bool obscureText = false, TextInputType? keyboardType}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1939,6 +2032,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         TextField(
           controller: controller,
           obscureText: obscureText,
+          keyboardType: keyboardType,
           decoration: InputDecoration(
             prefixIcon: Icon(icon, size: 18),
             hintText: hint,
@@ -1979,7 +2073,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ],
     );
   }
-
 }
 
 // =====================================================================

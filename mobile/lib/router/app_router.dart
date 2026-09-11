@@ -101,8 +101,14 @@ GoRouter buildAppRouter(AuthService authService) {
       GoRoute(path: '/login', builder: (context, state) => LoginScreen(authService: authService)),
       GoRoute(path: '/signup', builder: (context, state) => RegisterScreen(authService: authService)),
       GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
-      GoRoute(path: '/pending-approval', builder: (context, state) => const PendingApprovalScreenPlaceholder()),
-      GoRoute(path: '/account-rejected', builder: (context, state) => const AccountRejectedScreenPlaceholder()),
+      GoRoute(
+        path: '/pending-approval',
+        builder: (context, state) => AccountStatusScreen(authService: authService, rejected: false),
+      ),
+      GoRoute(
+        path: '/account-rejected',
+        builder: (context, state) => AccountStatusScreen(authService: authService, rejected: true),
+      ),
       GoRoute(path: '/home', builder: (context, state) => _HomeGate(authService: authService)),
       GoRoute(path: '/admin', builder: (context, state) => const AdminHomeScreenPlaceholder()),
       GoRoute(path: '/', redirect: (context, state) => '/home'),
@@ -161,12 +167,80 @@ class MfaSetupScreenPlaceholder extends _PlaceholderScreen {
   const MfaSetupScreenPlaceholder() : super('Set up MFA');
 }
 
-class PendingApprovalScreenPlaceholder extends _PlaceholderScreen {
-  const PendingApprovalScreenPlaceholder() : super('Pending approval');
-}
+/// Where a signed-in account that isn't active lands. These routes used to be
+/// a bare Text('Pending approval') / Text('Account rejected') with no way out:
+/// an alumni or business user who confirmed their email and signed in before
+/// approval had no sign-out button and no idea what they were waiting for.
+class AccountStatusScreen extends StatelessWidget {
+  const AccountStatusScreen({super.key, required this.authService, required this.rejected});
 
-class AccountRejectedScreenPlaceholder extends _PlaceholderScreen {
-  const AccountRejectedScreenPlaceholder() : super('Account rejected');
+  final AuthService authService;
+  final bool rejected;
+
+  String _message(String? role) {
+    if (rejected) {
+      return 'A Richfield administrator reviewed this account and did not approve it.';
+    }
+    switch (role) {
+      case 'alumni':
+        return 'A Richfield administrator is checking your student number and graduation details. '
+            'You can use Richfield Connect once your account is approved.';
+      case 'business':
+        return 'A Richfield administrator is reviewing your company. '
+            'You can post opportunities once your account is approved.';
+      default:
+        return 'Your account is waiting for a Richfield administrator to approve it.';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.surfaceContainerLow,
+      body: SafeArea(
+        child: FutureBuilder<Map<String, dynamic>>(
+          future: authService.fetchOwnProfile(),
+          builder: (context, snapshot) {
+            final role = snapshot.data?['role'] as String?;
+            return Padding(
+              padding: EdgeInsets.all(AppSpace.xl),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Icon(
+                    rejected ? Icons.block_outlined : Icons.hourglass_top_outlined,
+                    size: 56,
+                    color: rejected ? AppColors.error : AppColors.primary,
+                  ),
+                  SizedBox(height: AppSpace.md),
+                  Text(
+                    rejected ? 'Account not approved' : 'Waiting for approval',
+                    textAlign: TextAlign.center,
+                    style: AppText.headlineLg(),
+                  ),
+                  SizedBox(height: AppSpace.sm),
+                  Text(
+                    _message(role),
+                    textAlign: TextAlign.center,
+                    style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+                  ),
+                  SizedBox(height: AppSpace.xl),
+                  // signOut() fires onAuthStateChange, and the redirect above
+                  // sends a signed-out user to /login.
+                  OutlinedButton.icon(
+                    onPressed: authService.signOut,
+                    icon: Icon(Icons.logout),
+                    label: Text('Sign out'),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class AdminHomeScreenPlaceholder extends _PlaceholderScreen {
