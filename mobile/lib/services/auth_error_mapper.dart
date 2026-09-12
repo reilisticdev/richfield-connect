@@ -52,6 +52,19 @@ class AuthErrorMapper {
       return 'Too many emails requested. Wait a minute, then try again.';
     }
 
+    // GoTrue created the account but could not hand the confirmation email
+    // to the SMTP provider, so it rolled the sign-up back and returned a
+    // 500 whose body the SDK passes through verbatim - the member saw
+    // {"code":"unexpected_failure","message":"Error sending confirmation
+    // email"} on the register screen (2026-09-12: Resend refused the
+    // sender domain configured in Supabase Auth). Nothing they typed is
+    // wrong, and re-trying with the same address is fine.
+    if (lower.contains('sending confirmation email') ||
+        (lower.contains('unexpected_failure') && lower.contains('email'))) {
+      return "We couldn't send your confirmation email just now. That's a problem on "
+          "our side, not with your details - please try again in a few minutes.";
+    }
+
     return e.message;
   }
 
