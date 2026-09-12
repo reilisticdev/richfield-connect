@@ -1032,9 +1032,14 @@ Future<void> _startOnboardingTour(BuildContext context) {
 // =====================================================================
 
 class LoginScreen extends StatefulWidget {
-  LoginScreen({super.key, required this.authService});
+  LoginScreen({super.key, required this.authService, this.notice});
 
   final AuthService authService;
+
+  /// Why the user landed here without asking to (e.g. the router signed
+  /// the device out after an administrator removed the account). Shown in
+  /// the same slot as a sign-in error; cleared on the next attempt.
+  final String? notice;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -1047,6 +1052,12 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _errorMessage;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _errorMessage = widget.notice;
+  }
 
   @override
   void dispose() {

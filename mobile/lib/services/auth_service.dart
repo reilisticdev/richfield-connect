@@ -106,8 +106,38 @@ class AuthService {
     return _client.auth.resetPasswordForEmail(email.trim());
   }
 
+  /// Signs out everywhere. If GoTrue refuses the server-side part — the
+  /// session was already killed by an administrator's suspend/remove, or
+  /// the token has expired — fall back to clearing this device, so the
+  /// "Sign out" buttons on the suspended/pending screens and the account
+  /// menu always end with no session, never with an exception and a dead
+  /// token still on the phone.
   Future<void> signOut() async {
-    await _client.auth.signOut();
+    try {
+      await _client.auth.signOut();
+    } catch (_) {
+      await signOutLocally();
+      return;
+    }
+    _clearProfileCache();
+  }
+
+  /// Clears the session on this device only and never throws. For a
+  /// session the server has already invalidated (account removed or
+  /// banned), a global signOut() would call GoTrue's /logout and fail,
+  /// leaving the dead token in place — which is how the router looped
+  /// between /home and /login after an admin removed a test account.
+  Future<void> signOutLocally() async {
+    try {
+      await _client.auth.signOut(scope: SignOutScope.local);
+    } catch (_) {
+      // Local scope touches no network; nothing sensible can fail here,
+      // and if something did there is nothing better to do than move on.
+    }
+    _clearProfileCache();
+  }
+
+  void _clearProfileCache() {
     _cachedProfile = null;
     _cachedProfileUserId = null;
     _cachedProfileAt = null;
