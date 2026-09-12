@@ -12,6 +12,7 @@ import Opportunities from "./pages/Opportunities";
 import Events from "./pages/Events";
 import Announcements from "./pages/Announcements";
 import Analytics from "./pages/Analytics";
+import AuditLog from "./pages/AuditLog";
 
 function AdminLayout({ children }) {
   return (
@@ -106,6 +107,15 @@ function App() {
           element={
             <ProtectedAdminPage>
               <Analytics />
+            </ProtectedAdminPage>
+          }
+        />
+
+        <Route
+          path="/audit-log"
+          element={
+            <ProtectedAdminPage>
+              <AuditLog />
             </ProtectedAdminPage>
           }
         />
