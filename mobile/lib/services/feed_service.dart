@@ -1,0 +1,276 @@
+// mobile/lib/services/feed_service.dart
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'media_service.dart';
+
+class FeedService {
+  FeedService(this._client);
+  final SupabaseClient _client;
+
+  /// Columns every post card needs, with the author's name/role embedded via
+  /// posts.author_id -> profiles.id (the only FK from posts to profiles,
+  /// so the embed is unambiguous).
+  ///
+  /// `post_reposts(count)`, `reactions(count)` and `comments(count)` are
+  /// PostgREST aggregate embeds: each returns [{'count': n}] per row, so a
+  /// card renders real totals without an N+1 query. Each of those tables has
+  /// exactly one FK to posts. `!inner` is deliberately NOT used — inner would
+  /// drop every post with zero of them.
+  static const postFields = 'id, author_id, body, image_path, video_path, thumbnail_path, created_at, '
+      'profiles(first_name, last_name, role, avatar_path), '
+      'post_reposts(count), reactions(count), comments(count)';
+
+  /// comments.author_id is the only FK from comments to profiles.
+  static const commentFields = 'id, body, created_at, author_id, profiles(first_name, last_name, avatar_path)';
+
+  Future<List<Map<String, dynamic>>> fetchRecentPosts({int limit = 30}) async {
+    final rows = await _client
+        .from('posts')
+        .select(postFields)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// One member's own posts, newest first — the Portfolio tab's activity.
+  Future<List<Map<String, dynamic>>> fetchPostsByAuthor(String authorId, {int limit = 20}) async {
+    final rows = await _client
+        .from('posts')
+        .select(postFields)
+        .eq('author_id', authorId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Posts a member reposted, newest repost first, as
+  /// {created_at: <when reposted>, posts: <post row>}. post_reposts has one
+  /// FK to posts, so the embed is unambiguous, and the profiles embed inside
+  /// it is the ORIGINAL author — which is who the card should credit.
+  ///
+  /// Reposting never showed up on anyone's profile because the Portfolio tab
+  /// had no activity section at all, only MockData.
+  Future<List<Map<String, dynamic>>> fetchRepostsBy(String userId, {int limit = 20}) async {
+    final rows = await _client
+        .from('post_reposts')
+        .select('created_at, posts($postFields)')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Published events that haven't started, soonest first: the Events
+  /// screen lists them and the Feed banner shows the first. events' SELECT
+  /// policy already hides unpublished rows from non-admins; the status
+  /// filter is explicit so an administrator doesn't see drafts either.
+  ///
+  /// `ascending: true` is load-bearing. postgrest-dart's order() defaults to
+  /// DESCENDING, so the old banner query (.order('event_date').limit(1))
+  /// sent `order=event_date.desc` and showed the event furthest in the
+  /// future. That is why the Feed advertised Alumni Success Stories (9 Oct)
+  /// while the Graduate Career Fair (22 Sep) was sooner (API logs,
+  /// 2026-09-11).
+  Future<List<Map<String, dynamic>>> fetchUpcomingEvents({int limit = 50}) async {
+    final rows = await _client
+        .from('events')
+        .select('id, title, description, event_date, location')
+        .eq('status', 'published')
+        .gte('event_date', DateTime.now().toUtc().toIso8601String())
+        .order('event_date', ascending: true)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// The set of post ids the signed-in user has reposted, so the feed can
+  /// render the Repost button in its correct on/off state on first paint
+  /// instead of assuming "not reposted" and flickering after the fact.
+  Future<Set<String>> fetchMyRepostedPostIds(String userId) async {
+    final rows = await _client
+        .from('post_reposts')
+        .select('post_id')
+        .eq('user_id', userId);
+    return List<Map<String, dynamic>>.from(rows as List)
+        .map((r) => r['post_id'] as String)
+        .toSet();
+  }
+
+  /// Creates a post. `imagePath` is a storage object key produced by
+  /// MediaService.uploadPostImage; `videoPath` + `thumbnailPath` come from
+  /// MediaService.uploadPostVideo — upload first, then persist the paths, so
+  /// a failed upload never leaves a row pointing at a missing object.
+  ///
+  /// `.select().single()` is intentional: a bare insert resolves without
+  /// error even if RLS rejected the row, which is how a "Posted!" toast can
+  /// appear for a post that was never written. Returning the row forces the
+  /// failure to surface as a PostgrestException.
+  Future<Map<String, dynamic>> createPost({
+    required String authorId,
+    required String body,
+    String? imagePath,
+    String? videoPath,
+    String? thumbnailPath,
+  }) async {
+    return await _client
+        .from('posts')
+        .insert({
+          'author_id': authorId,
+          'body': body,
+          if (imagePath != null) 'image_path': imagePath,
+          if (videoPath != null) 'video_path': videoPath,
+          if (thumbnailPath != null) 'thumbnail_path': thumbnailPath,
+        })
+        .select()
+        .single();
+  }
+
+  /// Adds a repost. The (post_id, user_id) UNIQUE constraint from migration
+  /// 024 makes this idempotent: a double tap raises 23505 rather than
+  /// stacking duplicate rows, and we swallow exactly that code.
+  Future<void> repost({required String postId, required String userId}) async {
+    try {
+      await _client.from('post_reposts').insert({
+        'post_id': postId,
+        'user_id': userId,
+      });
+    } on PostgrestException catch (e) {
+      if (e.code == '23505') return; // already reposted — desired end state
+      rethrow;
+    }
+  }
+
+  Future<void> undoRepost({required String postId, required String userId}) async {
+    await _client
+        .from('post_reposts')
+        .delete()
+        .eq('post_id', postId)
+        .eq('user_id', userId);
+  }
+
+  /// Toggles and returns the resulting state, so the caller can update its
+  /// local count from one round trip.
+  Future<bool> toggleRepost({
+    required String postId,
+    required String userId,
+    required bool currentlyReposted,
+  }) async {
+    if (currentlyReposted) {
+      await undoRepost(postId: postId, userId: userId);
+      return false;
+    }
+    await repost(postId: postId, userId: userId);
+    return true;
+  }
+
+  /// Post ids the signed-in user has liked, for the Like button's first paint.
+  Future<Set<String>> fetchMyReactedPostIds(String userId) async {
+    final rows = await _client.from('reactions').select('post_id').eq('author_id', userId);
+    return List<Map<String, dynamic>>.from(rows as List).map((r) => r['post_id'] as String).toSet();
+  }
+
+  /// reactions has UNIQUE (post_id, author_id), so a second like raises 23505,
+  /// which is already the state we want. notify_post_activity() tells the
+  /// post's author about a new like.
+  Future<bool> toggleReaction({
+    required String postId,
+    required String userId,
+    required bool currentlyReacted,
+  }) async {
+    if (currentlyReacted) {
+      await _client.from('reactions').delete().eq('post_id', postId).eq('author_id', userId);
+      return false;
+    }
+    try {
+      await _client.from('reactions').insert({'post_id': postId, 'author_id': userId});
+    } on PostgrestException catch (e) {
+      if (e.code != '23505') rethrow;
+    }
+    return true;
+  }
+
+  /// Oldest first, so a thread reads top to bottom and a new comment (the
+  /// sheet appends it) lands at the end. Without `ascending: true` this was
+  /// newest first: postgrest-dart's order() defaults to descending.
+  Future<List<Map<String, dynamic>>> fetchComments(String postId) async {
+    final rows = await _client
+        .from('comments')
+        .select(commentFields)
+        .eq('post_id', postId)
+        .order('created_at', ascending: true);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Returns the stored row, so an RLS or length-check rejection (migration
+  /// 032: 1 to 1000 characters) surfaces instead of looking like a success.
+  Future<Map<String, dynamic>> addComment({
+    required String postId,
+    required String authorId,
+    required String body,
+  }) async {
+    return await _client
+        .from('comments')
+        .insert({'post_id': postId, 'author_id': authorId, 'body': body})
+        .select(commentFields)
+        .single();
+  }
+
+  /// A delete that RLS filters to zero rows doesn't raise, so check the count.
+  Future<void> deleteComment(String commentId) async {
+    final rows = await _client.from('comments').delete().eq('id', commentId).select('id');
+    if ((rows as List).isEmpty) {
+      throw const PostgrestException(message: 'That comment could not be deleted.');
+    }
+  }
+
+  /// Deletes a post. RLS ("Author manages own posts") limits this to the
+  /// author, plus administrators; its comments, reactions and reposts go
+  /// with it through ON DELETE CASCADE. Zero rows back means RLS refused.
+  ///
+  /// The deleted row's media paths come back from the same request, and the
+  /// files are then removed on a best-effort basis: the post is already gone
+  /// and nothing links to the file any more, so a storage error here must
+  /// not be reported as "couldn't delete your post".
+  Future<void> deletePost(String postId) async {
+    final rows = await _client
+        .from('posts')
+        .delete()
+        .eq('id', postId)
+        .select('image_path, video_path, thumbnail_path');
+    final deleted = List<Map<String, dynamic>>.from(rows as List);
+    if (deleted.isEmpty) {
+      throw const PostgrestException(message: 'That post could not be deleted.');
+    }
+
+    final row = deleted.first;
+    final paths = [
+      for (final key in const ['image_path', 'video_path', 'thumbnail_path'])
+        if (row[key] is String && (row[key] as String).isNotEmpty) row[key] as String,
+    ];
+    if (paths.isEmpty) return;
+    try {
+      await _client.storage.from(MediaService.postMediaBucket).remove(paths);
+    } catch (_) {
+      // Orphaned file only; see above.
+    }
+  }
+
+  /// Feeds the web Moderation page. Migration 032 allows one pending report
+  /// per member per item, so a repeat report is already the state we want.
+  Future<void> reportContent({
+    required String contentType,
+    required String contentId,
+    required String reporterId,
+    required String reason,
+  }) async {
+    try {
+      await _client.from('content_reports').insert({
+        'content_type': contentType,
+        'content_id': contentId,
+        'reported_by': reporterId,
+        'reason': reason,
+      });
+    } on PostgrestException catch (e) {
+      if (e.code != '23505') rethrow;
+    }
+  }
+}
