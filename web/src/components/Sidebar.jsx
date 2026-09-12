@@ -50,6 +50,10 @@ function Sidebar() {
         <NavLink to="/announcements">
           Announcements
         </NavLink>
+
+        <NavLink to="/audit-log">
+          Audit Log
+        </NavLink>
       </nav>
 
       <div className="sidebar-footer">
