@@ -43,6 +43,16 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="richfield" android:host="auth"/>
             </intent-filter>
+            <!-- richfield://member/<uid>: QR Connect. The Portfolio shows this
+                 link as a QR code; the phone camera opens it here and
+                 services/member_link.dart hands the id to RootShell, which
+                 pushes that member's profile. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="richfield" android:host="member"/>
+            </intent-filter>
             <!-- Keep Flutter's own deep-link routing off: with it on, GoRouter
                  would receive richfield://auth/confirmed as a route and show
                  "Page not found" while supabase_flutter was still signing
