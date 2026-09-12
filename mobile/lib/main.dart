@@ -976,81 +976,97 @@ class RichfieldHeader extends StatelessWidget {
   }
 }
 
-// Shared account-menu bottom sheet (Onboarding Tour / Log Out). Top-level so
-// every tab's RichfieldHeader.onAvatarTap can call it, not just Portfolio's.
-void _openAccountMenu(BuildContext context, AuthService authService) {
-  showModalBottomSheet(
+// A modal bottom sheet that can never overflow off the bottom of the screen:
+// isScrollControlled removes the default 9/16-of-screen height cap, and
+// wrapping the content in a SingleChildScrollView means anything still too
+// tall for a short screen or a large accessibility text size scrolls instead
+// of throwing a RenderFlex overflow. The plain QR code sheet (below) did
+// exactly that on Keshav's phone (2026-09-12): a 220x220 code plus five lines
+// of text through the default cap, with the overflow banner bleeding toward
+// the system navigation bar. Every fixed-menu bottom sheet uses this now.
+Future<T?> _scrollSafeSheet<T>(BuildContext context, {required WidgetBuilder builder}) {
+  return showModalBottomSheet<T>(
     context: context,
+    isScrollControlled: true,
     backgroundColor: AppColors.surfaceContainerLowest,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
     ),
-    builder: (_) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(Icons.help_outline),
-            title: Text('Take the Onboarding Tour'),
-            onTap: () {
-              Navigator.pop(context);
-              _startOnboardingTour(context);
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.route_outlined),
-            title: Text('Career pathways'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => CareerPathwaysScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.event_outlined),
-            title: Text('Events'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => EventsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.auto_awesome_outlined),
-            title: Text('Career AI assistant'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => AiAssistantScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.privacy_tip_outlined),
-            title: Text('Privacy & data'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => PrivacySettingsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.logout, color: AppColors.error),
-            title: Text('Log Out', style: TextStyle(color: AppColors.error)),
-            onTap: () async {
-              Navigator.pop(context);
-              await authService.signOut();
-              // go_router's redirect (listening to onAuthStateChange)
-              // bounces to /login on its own — no manual navigation here.
-            },
-          ),
-        ],
-      ),
+    builder: (sheet) => SafeArea(
+      child: SingleChildScrollView(child: builder(sheet)),
     ),
   );
+}
+
+// Shared account-menu bottom sheet (Onboarding Tour / Log Out). Top-level so
+// every tab's RichfieldHeader.onAvatarTap can call it, not just Portfolio's.
+void _openAccountMenu(BuildContext context, AuthService authService) {
+  unawaited(_scrollSafeSheet<void>(
+    context,
+    builder: (_) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          leading: Icon(Icons.help_outline),
+          title: Text('Take the Onboarding Tour'),
+          onTap: () {
+            Navigator.pop(context);
+            _startOnboardingTour(context);
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.route_outlined),
+          title: Text('Career pathways'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => CareerPathwaysScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.event_outlined),
+          title: Text('Events'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => EventsScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.auto_awesome_outlined),
+          title: Text('Career AI assistant'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => AiAssistantScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.privacy_tip_outlined),
+          title: Text('Privacy & data'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => PrivacySettingsScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.logout, color: AppColors.error),
+          title: Text('Log Out', style: TextStyle(color: AppColors.error)),
+          onTap: () async {
+            Navigator.pop(context);
+            await authService.signOut();
+            // go_router's redirect (listening to onAuthStateChange)
+            // bounces to /login on its own — no manual navigation here.
+          },
+        ),
+      ],
+    ),
+  ));
 }
 
 Future<void> _startOnboardingTour(BuildContext context) {
@@ -3674,27 +3690,25 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   /// the device straight away so the preview card can show the real size
   /// that will be uploaded — not the 60 MB the phone recorded.
   Future<void> _pickVideo() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.videocam_outlined, color: AppColors.primary),
-              title: Text('Record a video'),
-              subtitle: Text('Up to ${MediaService.maxVideoSeconds} seconds'),
-              onTap: () => Navigator.pop(sheet, ImageSource.camera),
-            ),
-            ListTile(
-              leading: Icon(Icons.video_library_outlined, color: AppColors.primary),
-              title: Text('Choose from gallery'),
-              subtitle: Text('Compressed on your phone before upload'),
-              onTap: () => Navigator.pop(sheet, ImageSource.gallery),
-            ),
-            SizedBox(height: AppSpace.sm),
-          ],
-        ),
+    final source = await _scrollSafeSheet<ImageSource>(
+      context,
+      builder: (sheet) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.videocam_outlined, color: AppColors.primary),
+            title: Text('Record a video'),
+            subtitle: Text('Up to ${MediaService.maxVideoSeconds} seconds'),
+            onTap: () => Navigator.pop(sheet, ImageSource.camera),
+          ),
+          ListTile(
+            leading: Icon(Icons.video_library_outlined, color: AppColors.primary),
+            title: Text('Choose from gallery'),
+            subtitle: Text('Compressed on your phone before upload'),
+            onTap: () => Navigator.pop(sheet, ImageSource.gallery),
+          ),
+          SizedBox(height: AppSpace.sm),
+        ],
       ),
     );
     if (source == null || !mounted) return;
@@ -5207,65 +5221,59 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final lastName = _profile?['last_name'] as String? ?? '';
     final displayName = ('$firstName $lastName').trim();
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
-      ),
-      builder: (sheet) => SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.lg, AppSpace.xl, AppSpace.xl),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('My QR code', style: AppText.headlineMd()),
-              SizedBox(height: AppSpace.xs),
-              Text(
-                'Let someone scan this with their phone camera to open your profile in Richfield Connect.',
-                textAlign: TextAlign.center,
-                style: _muted,
+    unawaited(_scrollSafeSheet<void>(
+      context,
+      builder: (sheet) => Padding(
+        padding: EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.lg, AppSpace.xl, AppSpace.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('My QR code', style: AppText.headlineMd()),
+            SizedBox(height: AppSpace.xs),
+            Text(
+              'Let someone scan this with their phone camera to open your profile in Richfield Connect.',
+              textAlign: TextAlign.center,
+              style: _muted,
+            ),
+            SizedBox(height: AppSpace.lg),
+            Container(
+              padding: EdgeInsets.all(AppSpace.md),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
               ),
-              SizedBox(height: AppSpace.lg),
-              Container(
-                padding: EdgeInsets.all(AppSpace.md),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                ),
-                child: SizedBox(
-                  width: 220,
-                  height: 220,
-                  child: PrettyQrView.data(
-                    data: link,
-                    decoration: const PrettyQrDecoration(
-                      shape: PrettyQrSmoothSymbol(color: Colors.black),
-                    ),
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: PrettyQrView.data(
+                  data: link,
+                  decoration: const PrettyQrDecoration(
+                    shape: PrettyQrSmoothSymbol(color: Colors.black),
                   ),
                 ),
               ),
-              SizedBox(height: AppSpace.md),
-              if (displayName.isNotEmpty) Text(displayName, style: AppText.labelLg()),
-              SizedBox(height: AppSpace.xs),
-              Text(link, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              SizedBox(height: AppSpace.md),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: link));
-                  if (!sheet.mounted) return;
-                  Navigator.pop(sheet);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Profile link copied.')),
-                  );
-                },
-                icon: Icon(Icons.copy_outlined, size: 18),
-                label: Text('Copy link'),
-              ),
-            ],
-          ),
+            ),
+            SizedBox(height: AppSpace.md),
+            if (displayName.isNotEmpty) Text(displayName, style: AppText.labelLg()),
+            SizedBox(height: AppSpace.xs),
+            Text(link, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+            SizedBox(height: AppSpace.md),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: link));
+                if (!sheet.mounted) return;
+                Navigator.pop(sheet);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Profile link copied.')),
+                );
+              },
+              icon: Icon(Icons.copy_outlined, size: 18),
+              label: Text('Copy link'),
+            ),
+          ],
         ),
       ),
-    );
+    ));
   }
 
   Future<void> _openEditProfile() async {
