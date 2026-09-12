@@ -56,6 +56,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
   List<Map<String, dynamic>> _experience = [];
   List<Map<String, dynamic>> _projects = [];
   List<Map<String, dynamic>> _certifications = [];
+  List<Map<String, dynamic>> _badges = [];
   List<Map<String, dynamic>> _recommendations = [];
   Map<String, dynamic>? _company;
   String _myRole = '';
@@ -106,6 +107,10 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
             .select('title, issuer, credential_url, date_earned')
             .eq('profile_id', id),
         _client
+            .from('badges')
+            .select('title, issuer, credential_url, date_earned')
+            .eq('profile_id', id),
+        _client
             .from('recommendations')
             .select('id, body, created_at, author_id, '
                 'author:profiles!recommendations_author_id_fkey(first_name, last_name, role, '
@@ -131,10 +136,11 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
         _experience = rows(4);
         _projects = rows(5);
         _certifications = rows(6);
-        _recommendations = rows(7);
-        _company = results[8] as Map<String, dynamic>?;
-        _myRole = (results[9] as Map<String, dynamic>)['role'] as String? ?? '';
-        _network = results[10] as NetworkSnapshot;
+        _badges = rows(7);
+        _recommendations = rows(8);
+        _company = results[9] as Map<String, dynamic>?;
+        _myRole = (results[10] as Map<String, dynamic>)['role'] as String? ?? '';
+        _network = results[11] as NetworkSnapshot;
         _loading = false;
       });
 
@@ -278,6 +284,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
               const SizedBox(height: AppSpace.lg),
               _certificationsSection(),
             ],
+            if (_badges.isNotEmpty) ...[const SizedBox(height: AppSpace.lg), _badgesSection()],
             if (_education.isNotEmpty) ...[const SizedBox(height: AppSpace.lg), _educationSection()],
             const SizedBox(height: AppSpace.lg),
             _recommendationsSection(person),
@@ -667,6 +674,34 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       ],
     );
   }
+
+  Widget _badgesSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title: 'Badges'),
+        for (final b in _badges)
+          _entryCard(
+            icon: Icons.military_tech_outlined,
+            title: b['title'] as String? ?? '',
+            subtitle: [b['issuer'] as String?, monthYearLabel(b['date_earned'])]
+                .whereType<String>()
+                .where((v) => v.isNotEmpty)
+                .join(' • '),
+            actions: [
+              if ((b['credential_url'] as String?)?.trim().isNotEmpty ?? false)
+                TextButton.icon(
+                  onPressed: () => _launch(b['credential_url'] as String),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: Text(_isCredly(b['credential_url'] as String) ? 'View on Credly' : 'View badge'),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  bool _isCredly(String url) => url.toLowerCase().contains('credly.com');
 
   Widget _educationSection() {
     return Column(

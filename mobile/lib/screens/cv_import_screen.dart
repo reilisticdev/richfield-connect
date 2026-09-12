@@ -27,6 +27,7 @@ import '../main.dart' show AppColors, AppRadius, AppSpace, AppText;
 import '../services/ai_service.dart';
 import '../services/auth_error_mapper.dart';
 import '../services/profile_context_service.dart';
+import '../services/media_service.dart';
 import '../services/profile_service.dart';
 import '../widgets/ai_consent_prompt.dart';
 
@@ -53,6 +54,7 @@ class _CvImportScreenState extends State<CvImportScreen> {
 
   final _client = Supabase.instance.client;
   late final _profileService = ProfileService(_client);
+  late final _mediaService = MediaService(_client);
   late final _contextService = ProfileContextService(_client);
   final _ai = AiService();
   final _cv = TextEditingController();
@@ -63,6 +65,15 @@ class _CvImportScreenState extends State<CvImportScreen> {
 
   /// Name of the PDF being read, or last read.
   String? _pdfName;
+
+  /// The PDF itself, kept so Apply can store it on the profile as evidence
+  /// (migration 038). Null for a paste-text import.
+  Uint8List? _pdfBytes;
+
+  /// Whether Apply also keeps the PDF. Default on: the point of the
+  /// evidence is that it's there. Off with one tap for anyone who only
+  /// wants the extraction.
+  bool _keepCv = true;
 
   /// Whether the extraction in progress came from a PDF rather than text.
   bool _parsingPdf = false;
@@ -146,7 +157,10 @@ class _CvImportScreenState extends State<CvImportScreen> {
     setState(() {
       _parsing = true;
       _parsingPdf = pdf != null;
-      if (pdf != null) _pdfName = pdfName;
+      if (pdf != null) {
+        _pdfName = pdfName;
+        _pdfBytes = pdf;
+      }
       _error = null;
     });
 
@@ -234,12 +248,23 @@ class _CvImportScreenState extends State<CvImportScreen> {
           ? const <String>[]
           : await _profileService.addSkills(userId: userId, names: _pickedSkills);
 
+      // The file goes to the private cvs bucket and the profile points at
+      // it — after the profile fields, so a storage failure can't undo an
+      // extraction that already succeeded.
+      String? cvPath;
+      final pdf = _pdfBytes;
+      if (_keepCv && pdf != null) {
+        cvPath = await _mediaService.uploadCv(userId: userId, bytes: pdf);
+        await _profileService.setCvPath(userId: userId, path: cvPath);
+      }
+
       if (!mounted) return;
       final changes = [
         if (_useName) 'name',
         if (_useHeadline) 'headline',
         if (bio != null) 'About section',
         if (added.isNotEmpty) '${added.length} skill${added.length == 1 ? '' : 's'}',
+        if (cvPath != null) 'CV file',
       ];
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(changes.isEmpty ? 'Nothing new to add.' : 'Updated your ${changes.join(', ')}.'),
@@ -257,7 +282,11 @@ class _CvImportScreenState extends State<CvImportScreen> {
   @override
   Widget build(BuildContext context) {
     final ctx = _ctx;
-    final anythingPicked = _useName || _useHeadline || _useEducation || _pickedSkills.isNotEmpty;
+    final anythingPicked = _useName ||
+        _useHeadline ||
+        _useEducation ||
+        _pickedSkills.isNotEmpty ||
+        (_keepCv && _pdfBytes != null);
     final locked = _parsing || _saving;
     final readingText = _parsing && !_parsingPdf;
 
@@ -445,6 +474,16 @@ class _CvImportScreenState extends State<CvImportScreen> {
           currentNote: 'Added below your existing About text.',
           value: _useEducation,
           onChanged: (v) => setState(() => _useEducation = v),
+        ),
+      if (_pdfBytes != null)
+        _fieldTile(
+          title: 'Keep this PDF on your profile as evidence',
+          extracted: _pdfName ?? 'cv.pdf',
+          current: 'private',
+          currentNote: 'Private: only you and administrators can open it. '
+              'Replace or remove it any time from your Portfolio.',
+          value: _keepCv,
+          onChanged: (v) => setState(() => _keepCv = v),
         ),
       const SizedBox(height: AppSpace.sm),
       Text('Skills', style: AppText.labelLg()),

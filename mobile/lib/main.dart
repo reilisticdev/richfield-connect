@@ -2382,9 +2382,27 @@ class ApplicantsScreen extends StatefulWidget {
 
 class _ApplicantsScreenState extends State<ApplicantsScreen> {
   final _jobsService = JobsService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _applicants = [];
+
+  /// cvs is private; the 039 storage policy lets this business sign a URL
+  /// only for a CV attached to an application on its own listing.
+  Future<void> _openCv(String path) async {
+    try {
+      final url = await _mediaService.cvSignedUrl(path);
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No app on this device could open the PDF.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
 
   @override
   void initState() {
@@ -2448,26 +2466,47 @@ class _ApplicantsScreenState extends State<ApplicantsScreen> {
     final initials = (first.isNotEmpty ? first[0] : '') + (last.isNotEmpty ? last[0] : '');
     final status = row['status'] as String? ?? 'submitted';
     final appliedAt = DateTime.tryParse(row['applied_at'] as String? ?? '');
+    final cvPath = (row['cv_path'] as String?)?.trim();
+    final hasCv = cvPath != null && cvPath.isNotEmpty;
 
     return RoundedCard(
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
-          SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
-                if (headline != null && headline.isNotEmpty)
-                  Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                if (appliedAt != null)
-                  Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              ],
-            ),
+          Row(
+            children: [
+              InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
+                    if (headline != null && headline.isNotEmpty)
+                      Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                    if (appliedAt != null)
+                      Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              _statusPill(status),
+            ],
           ),
-          _statusPill(status),
+          SizedBox(height: AppSpace.sm),
+          // The CV submitted with this application (migration 039), or an
+          // honest note — never a button that opens nothing.
+          hasCv
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _openCv(cvPath),
+                    icon: Icon(Icons.picture_as_pdf_outlined, size: 16),
+                    label: Text('View CV'),
+                  ),
+                )
+              : Text('No CV attached to this application.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
         ],
       ),
     );
@@ -4110,6 +4149,8 @@ class JobsScreen extends StatefulWidget {
 class _JobsScreenState extends State<JobsScreen> {
   final _authService = AuthService(Supabase.instance.client);
   final _jobsService = JobsService(Supabase.instance.client);
+  final _profileService = ProfileService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   final _searchController = TextEditingController();
 
   bool _loading = true;
@@ -4208,14 +4249,76 @@ class _JobsScreenState extends State<JobsScreen> {
     ];
   }
 
+  /// Applying shares the member's CV on file with that employer for this
+  /// application (migration 039). The member is told so before confirming:
+  /// Guidelines 2.1 — a business sees only what a student explicitly makes
+  /// visible, and this is that explicit act. No CV on file is not an error;
+  /// the employer then sees the profile only.
   Future<void> _apply(Map<String, dynamic> job) async {
     final studentId = _authService.currentUser?.id;
     if (studentId == null) return;
+
+    final title = job['title'] as String? ?? 'this opportunity';
+    final businessProfile = (job['profiles'] as Map<String, dynamic>?)?['business_profiles'];
+    final companyRaw =
+        (businessProfile is Map ? businessProfile['company_name'] as String? : null)?.trim();
+    final company = (companyRaw == null || companyRaw.isEmpty) ? 'the employer' : companyRaw;
+
+    String? cvPath;
     try {
-      await _jobsService.apply(opportunityId: job['id'] as String, studentId: studentId);
+      cvPath = (await _profileService.fetchCvStatus(studentId)).path;
+    } catch (_) {
+      // Can't read the CV status: apply without it rather than block.
+    }
+    if (!mounted) return;
+
+    final hasCv = cvPath != null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Apply to $title?'),
+        content: Text(hasCv
+            ? 'Your CV on file will be shared with $company for this application, '
+                'along with your profile.'
+            : 'You have no CV on file, so $company will see your profile only. '
+                'You can add one under Career AI → Import my CV and apply afterwards.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(hasCv ? 'Share CV & apply' : 'Apply anyway'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      String? snapshot;
+      if (cvPath != null) {
+        try {
+          snapshot = await _mediaService.snapshotCvForApplication(
+            userId: studentId,
+            sourcePath: cvPath,
+          );
+        } catch (_) {
+          // The copy is a nicety (the business sees what was submitted even
+          // if the CV changes later). If it fails, attach the live CV
+          // instead — the storage policy accepts either key.
+          snapshot = cvPath;
+        }
+      }
+      await _jobsService.apply(
+        opportunityId: job['id'] as String,
+        studentId: studentId,
+        cvPath: snapshot,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Applied to ${job['title']}.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(snapshot != null
+            ? 'Applied to $title. Your CV was attached.'
+            : 'Applied to $title.'),
+      ));
     } on PostgrestException catch (e) {
       if (!mounted) return;
       final message = e.code == '23505'
@@ -4530,6 +4633,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   bool _loadingPortfolio = true;
   String? _portfolioError;
 
+  /// profiles.cv_path / cv_uploaded_at (migration 038). Read separately
+  /// from the profile row; see ProfileService.fetchCvStatus.
+  ({String? path, DateTime? uploadedAt})? _cvStatus;
+  bool _cvBusy = false;
+
   List<_ActivityItem> _activity = [];
   bool _loadingActivity = true;
   String? _activityError;
@@ -4554,11 +4662,79 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     super.initState();
     _reloadProfile();
     _loadPortfolio();
+    _loadCvStatus();
     _loadActivity();
   }
 
   Future<void> _refresh() async {
-    await Future.wait([_reloadProfile(), _loadPortfolio(), _loadActivity()]);
+    await Future.wait([_reloadProfile(), _loadPortfolio(), _loadCvStatus(), _loadActivity()]);
+  }
+
+  Future<void> _loadCvStatus() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final status = await _profileService.fetchCvStatus(userId);
+      if (!mounted) return;
+      setState(() => _cvStatus = status);
+    } catch (_) {
+      // The card falls back to "no CV on file"; nothing else depends on it.
+    }
+  }
+
+  Future<void> _openCv() async {
+    final path = _cvStatus?.path;
+    if (path == null) return;
+    setState(() => _cvBusy = true);
+    try {
+      final url = await _mediaService.cvSignedUrl(path);
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No app on this device could open the PDF.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _cvBusy = false);
+    }
+  }
+
+  Future<void> _removeCv() async {
+    final userId = _userId;
+    final path = _cvStatus?.path;
+    if (userId == null || path == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Remove your CV?'),
+        content: Text('The PDF is deleted from your profile. Your extracted details stay.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Keep it')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text('Remove', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _cvBusy = true);
+    try {
+      // Pointer first, then the object: a row pointing at a missing file is
+      // the worse of the two failure modes.
+      await _profileService.setCvPath(userId: userId, path: null);
+      await _mediaService.removeCv(path);
+      if (!mounted) return;
+      setState(() => _cvStatus = (path: null, uploadedAt: null));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _cvBusy = false);
+    }
   }
 
   Future<void> _loadPortfolio() async {
@@ -4750,7 +4926,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 
   Future<void> _openCvImport() async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
-    await Future.wait([_reloadProfile(), _loadPortfolio()]);
+    await Future.wait([_reloadProfile(), _loadPortfolio(), _loadCvStatus()]);
   }
 
   Future<void> _openLink(String? rawUrl, String label) async {
@@ -5160,6 +5336,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final p = _portfolio;
     return [
       SizedBox(height: AppSpace.xl),
+      _cvEvidenceCard(),
+      SizedBox(height: AppSpace.lg),
       _skillsSection(),
       _entrySection(
         section: PortfolioSection.experience,
@@ -5240,6 +5418,30 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         },
       ),
       _entrySection(
+        section: PortfolioSection.badges,
+        title: 'Badges',
+        rows: p.badges,
+        empty: 'Digital badges from Credly, Microsoft Learn, Google, AWS and the like — with the link.',
+        card: (row, onRemove) {
+          final url = (row['credential_url'] as String?)?.trim() ?? '';
+          final isCredly = url.toLowerCase().contains('credly.com');
+          return _entryCard(
+            icon: Icons.military_tech_outlined,
+            title: row['title'] as String? ?? '',
+            subtitle: _joinParts([row['issuer'], monthYearLabel(row['date_earned'])]),
+            onRemove: onRemove,
+            actions: [
+              if (url.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openLink(url, 'badge'),
+                  icon: Icon(Icons.open_in_new, size: 16),
+                  label: Text(isCredly ? 'View on Credly' : 'View badge'),
+                ),
+            ],
+          );
+        },
+      ),
+      _entrySection(
         section: PortfolioSection.leadership,
         title: 'Leadership',
         rows: p.leadership,
@@ -5294,6 +5496,87 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               style: _muted,
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// "CV on file" evidence (rubric Section 3). The PDF lives in the private
+  /// cvs bucket; View mints a short-lived signed URL and hands it to the
+  /// system PDF viewer. Replace goes through the same CV import that
+  /// stored it.
+  Widget _cvEvidenceCard() {
+    final status = _cvStatus;
+    final path = status?.path;
+    final uploaded = status?.uploadedAt;
+    final hasCv = path != null;
+
+    return RoundedCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: hasCv ? AppColors.primaryContainer : AppColors.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Icon(
+                  hasCv ? Icons.picture_as_pdf_outlined : Icons.upload_file_outlined,
+                  color: hasCv ? AppColors.onPrimaryContainer : AppColors.onSurfaceVariant,
+                ),
+              ),
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(hasCv ? 'CV on file' : 'No CV on file', style: AppText.labelLg()),
+                    Text(
+                      hasCv
+                          ? (uploaded != null
+                              ? 'Uploaded ${monthYearLabel(uploaded.toIso8601String()) ?? ''} · private: only you and administrators can open it'
+                              : 'Private: only you and administrators can open it')
+                          : 'Import your CV to fill in your profile and keep the PDF here as evidence.',
+                      style: _muted,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: AppSpace.sm),
+          Wrap(
+            spacing: 4,
+            children: hasCv
+                ? [
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _openCv,
+                      icon: Icon(Icons.open_in_new, size: 16),
+                      label: Text('View'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _openCvImport,
+                      icon: Icon(Icons.autorenew, size: 16),
+                      label: Text('Replace'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _removeCv,
+                      icon: Icon(Icons.delete_outline, size: 16, color: AppColors.error),
+                      label: Text('Remove', style: TextStyle(color: AppColors.error)),
+                    ),
+                  ]
+                : [
+                    TextButton.icon(
+                      onPressed: _openCvImport,
+                      icon: Icon(Icons.upload_file_outlined, size: 16),
+                      label: Text('Import my CV'),
+                    ),
+                  ],
+          ),
         ],
       ),
     );

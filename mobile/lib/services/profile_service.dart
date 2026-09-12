@@ -93,6 +93,36 @@ class ProfileService {
         .single();
   }
 
+  /// Read on their own rather than as part of the general profile read, so
+  /// the Portfolio's CV card works whichever of migrations 037 (explicit
+  /// column grants) and 038 (these columns) is applied first.
+  Future<({String? path, DateTime? uploadedAt})> fetchCvStatus(String userId) async {
+    final row = await _client
+        .from('profiles')
+        .select('cv_path, cv_uploaded_at')
+        .eq('id', userId)
+        .single();
+    final path = row['cv_path'] as String?;
+    return (
+      path: (path == null || path.isEmpty) ? null : path,
+      uploadedAt: DateTime.tryParse(row['cv_uploaded_at'] as String? ?? ''),
+    );
+  }
+
+  /// `path` null clears the CV. `.select().single()` for the same reason as
+  /// every other write here: an RLS no-op must not look like success.
+  Future<void> setCvPath({required String userId, required String? path}) async {
+    await _client
+        .from('profiles')
+        .update({
+          'cv_path': path,
+          'cv_uploaded_at': path == null ? null : DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', userId)
+        .select('id')
+        .single();
+  }
+
   /// Adds the skills the user doesn't already list and returns the names
   /// actually inserted. Matching is case-insensitive: the CV parser and the
   /// skill suggester produce "Sql" as readily as "SQL", and `skills` has no

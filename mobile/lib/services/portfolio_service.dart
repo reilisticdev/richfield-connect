@@ -18,7 +18,7 @@
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-enum PortfolioSection { education, experience, projects, certifications, leadership }
+enum PortfolioSection { education, experience, projects, certifications, badges, leadership }
 
 extension PortfolioSectionTable on PortfolioSection {
   String get table => switch (this) {
@@ -26,6 +26,7 @@ extension PortfolioSectionTable on PortfolioSection {
         PortfolioSection.experience => 'work_experience',
         PortfolioSection.projects => 'projects',
         PortfolioSection.certifications => 'certifications',
+        PortfolioSection.badges => 'badges',
         PortfolioSection.leadership => 'leadership_roles',
       };
 }
@@ -38,6 +39,7 @@ class PortfolioData {
     this.experience = const [],
     this.projects = const [],
     this.certifications = const [],
+    this.badges = const [],
     this.leadership = const [],
     this.recommendations = const [],
     this.connectionCount = 0,
@@ -51,6 +53,10 @@ class PortfolioData {
   final List<Map<String, dynamic>> experience;
   final List<Map<String, dynamic>> projects;
   final List<Map<String, dynamic>> certifications;
+
+  /// Digital badges (Credly, Microsoft Learn, Google, AWS…): {id, title,
+  /// issuer, credential_url, date_earned}. Same table shape as certifications.
+  final List<Map<String, dynamic>> badges;
   final List<Map<String, dynamic>> leadership;
 
   /// Recommendations received, each with an embedded `author` profile.
@@ -89,6 +95,11 @@ class PortfolioService {
           .eq('profile_id', userId)
           .order('date_earned', ascending: false),
       _client
+          .from('badges')
+          .select('id, title, issuer, credential_url, date_earned')
+          .eq('profile_id', userId)
+          .order('date_earned', ascending: false),
+      _client
           .from('leadership_roles')
           .select('id, role_title, organisation, description')
           .eq('profile_id', userId),
@@ -116,9 +127,10 @@ class PortfolioService {
       experience: rows(3),
       projects: rows(4),
       certifications: rows(5),
-      leadership: rows(6),
-      recommendations: rows(7),
-      connectionCount: rows(8).length,
+      badges: rows(6),
+      leadership: rows(7),
+      recommendations: rows(8),
+      connectionCount: rows(9).length,
     );
   }
 
