@@ -28,11 +28,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -59,7 +61,9 @@ import 'services/push_notification_service.dart';
 import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
+import 'screens/member_profile_screen.dart';
 import 'services/email_confirmation.dart';
+import 'services/member_link.dart';
 import 'widgets/post_video_player.dart';
 import 'screens/career_pathways_screen.dart';
 import 'screens/events_screen.dart';
@@ -104,6 +108,9 @@ void main() async {
   // code-for-session exchange) so the shell can say "your email is
   // confirmed" once. Not awaited: nothing here depends on it.
   unawaited(EmailConfirmation.listenForDeepLink());
+  // richfield://member/<uid> (a scanned QR Connect code): RootShell opens
+  // that profile once a signed-in shell is on screen.
+  unawaited(MemberLink.listenForDeepLink());
   final authService = AuthService(Supabase.instance.client);
   // richfield://auth/recovery (reset link tapped on this phone): once the
   // session lands, the router parks it on /reset-password. A later ordinary
@@ -2793,14 +2800,30 @@ class _RootShellState extends State<RootShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await EmailConfirmation.showWelcomeIfDue(context, awaitingApproval: false);
       if (mounted) _maybeShowTour();
+      // A QR Connect link that cold-started the app (or arrived while the
+      // member was still signing in) is waiting by now.
+      if (mounted) _openPendingMemberLink();
     });
+    MemberLink.pendingProfileId.addListener(_openPendingMemberLink);
   }
 
   @override
   void dispose() {
+    MemberLink.pendingProfileId.removeListener(_openPendingMemberLink);
     _alertSubscription?.cancel();
     RealtimeHub.instance.release();
     super.dispose();
+  }
+
+  /// richfield://member/<uid>: open that profile over the shell, the same
+  /// push the Network and chat screens use. Taking the id first means a
+  /// second scan of the same code opens it again.
+  void _openPendingMemberLink() {
+    final profileId = MemberLink.consumePending();
+    if (profileId == null || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => MemberProfileScreen(profileId: profileId)),
+    );
   }
 
   Future<void> _maybeShowTour() async {
@@ -5173,6 +5196,78 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   /// Opens the edit form and adopts whatever row comes back, so the header
   /// repaints from the database's version of the truth rather than from
   /// what the form hoped it wrote.
+  /// QR Connect: a code another member scans with their phone camera to
+  /// open this profile (richfield://member/<uid>, services/member_link.dart).
+  /// Always dark-on-white whatever the theme, so cameras read it.
+  void _showMyQrCode() {
+    final profileId = widget.authService.currentUser?.id;
+    if (profileId == null) return;
+    final link = MemberLink.linkFor(profileId);
+    final firstName = _profile?['first_name'] as String? ?? '';
+    final lastName = _profile?['last_name'] as String? ?? '';
+    final displayName = ('$firstName $lastName').trim();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheet) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.lg, AppSpace.xl, AppSpace.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('My QR code', style: AppText.headlineMd()),
+              SizedBox(height: AppSpace.xs),
+              Text(
+                'Let someone scan this with their phone camera to open your profile in Richfield Connect.',
+                textAlign: TextAlign.center,
+                style: _muted,
+              ),
+              SizedBox(height: AppSpace.lg),
+              Container(
+                padding: EdgeInsets.all(AppSpace.md),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                ),
+                child: SizedBox(
+                  width: 220,
+                  height: 220,
+                  child: PrettyQrView.data(
+                    data: link,
+                    decoration: const PrettyQrDecoration(
+                      shape: PrettyQrSmoothSymbol(color: Colors.black),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: AppSpace.md),
+              if (displayName.isNotEmpty) Text(displayName, style: AppText.labelLg()),
+              SizedBox(height: AppSpace.xs),
+              Text(link, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+              SizedBox(height: AppSpace.md),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: link));
+                  if (!sheet.mounted) return;
+                  Navigator.pop(sheet);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Profile link copied.')),
+                  );
+                },
+                icon: Icon(Icons.copy_outlined, size: 18),
+                label: Text('Copy link'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openEditProfile() async {
     final userId = widget.authService.currentUser?.id;
     final profile = _profile;
@@ -5440,6 +5535,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     ],
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'My QR code',
+                onPressed: _showMyQrCode,
+                icon: Icon(Icons.qr_code_2, color: AppColors.primary),
               ),
             ],
           ),

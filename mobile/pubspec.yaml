@@ -31,6 +31,9 @@ dependencies:
   video_compress: ^3.1.4
   video_player: ^2.14.0
   app_links: ^7.2.1
+  # QR Connect: renders richfield://member/<uid> on the Portfolio so another
+  # member can scan it with their camera (services/member_link.dart).
+  pretty_qr_code: ^3.6.0
 
 dev_dependencies:
   flutter_test:
