@@ -27,8 +27,10 @@ function Moderation() {
   const fetchPendingBusinesses = async () => {
     setLoadingBusinesses(true);
 
+    // admin_profiles (migration 037): the only API path that still returns
+    // email, and only to administrators.
     const { data, error } = await supabase
-      .from("profiles")
+      .from("admin_profiles")
       .select(
         "id, first_name, last_name, email, account_status, business_profiles(company_name)"
       )
@@ -51,7 +53,9 @@ function Moderation() {
     const { data, error } = await supabase
       .from("verification_claims")
       .select(
-        "id, student_number, programme, campus, graduation_year, status, profiles(first_name, last_name, email)"
+        // `profiles:` aliases the admin_profiles embed so the JSX below keeps
+        // reading claim.profiles.* unchanged.
+        "id, student_number, programme, campus, graduation_year, status, profiles:admin_profiles(first_name, last_name, email)"
       )
       .eq("status", "pending");
 

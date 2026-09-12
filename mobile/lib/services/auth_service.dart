@@ -7,6 +7,8 @@
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'profile_service.dart';
+
 /// Allowed self-registration roles. 'administrator' is intentionally
 /// excluded — supabase/migrations/005_signup_role_restriction.sql rejects
 /// it at the trigger level, and the client should never offer it as an
@@ -139,9 +141,11 @@ class AuthService {
       return _cachedProfile!;
     }
 
+    // Explicit columns: `select *` is refused on profiles since migration
+    // 037 (email / fcm_token are member-invisible). See ProfileService.
     final profile = await _client
         .from('profiles')
-        .select()
+        .select(ProfileService.columns)
         .eq('id', userId)
         .single();
     _cachedProfile = profile;
