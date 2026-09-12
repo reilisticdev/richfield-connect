@@ -17,6 +17,7 @@
 // Flutter as a generic StorageException with no hint about the cause.
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -148,6 +149,42 @@ class MediaService {
 
   String postImageUrl(String path) => publicUrl(postMediaBucket, path);
   String avatarUrl(String path) => publicUrl(avatarsBucket, path, bustCache: true);
+
+  // --- CV (private evidence) --------------------------------------------
+
+  /// Private bucket (migration 038): owner + administrators only, PDF only.
+  static const String cvsBucket = 'cvs';
+  static const int maxCvBytes = 5 * 1024 * 1024;
+
+  /// One stable key per member. A re-import replaces the object (the bucket
+  /// has an UPDATE policy for exactly this) instead of stacking copies.
+  static String cvObjectKey(String userId) => '$userId/cv.pdf';
+
+  /// Stores the CV PDF and returns the path for `profiles.cv_path`.
+  Future<String> uploadCv({required String userId, required Uint8List bytes}) async {
+    if (bytes.length > maxCvBytes) {
+      throw MediaException(
+        'That PDF is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} MB. '
+        'Choose one under ${maxCvBytes ~/ (1024 * 1024)} MB.',
+      );
+    }
+    final path = cvObjectKey(userId);
+    await _client.storage.from(cvsBucket).uploadBinary(
+          path,
+          bytes,
+          fileOptions: const FileOptions(upsert: true, contentType: 'application/pdf'),
+        );
+    return path;
+  }
+
+  /// The bucket is private, so every open mints a short-lived signed URL;
+  /// nothing durable is ever handed out or stored.
+  Future<String> cvSignedUrl(String path) =>
+      _client.storage.from(cvsBucket).createSignedUrl(path, 600);
+
+  Future<void> removeCv(String path) async {
+    await _client.storage.from(cvsBucket).remove([path]);
+  }
 
   // --- helpers -------------------------------------------------------
 

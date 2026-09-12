@@ -32,6 +32,7 @@ const _titles = {
   PortfolioSection.experience: 'Add experience',
   PortfolioSection.projects: 'Add a project',
   PortfolioSection.certifications: 'Add a certification',
+  PortfolioSection.badges: 'Add a badge',
   PortfolioSection.leadership: 'Add a leadership role',
 };
 
@@ -60,6 +61,12 @@ const _fields = <PortfolioSection, List<_Field>>{
     _Field('title', 'Certification', required: true),
     _Field('issuer', 'Issued by'),
     _Field('credential_url', 'Credential link', kind: _Kind.url),
+    _Field('date_earned', 'Date earned', kind: _Kind.date),
+  ],
+  PortfolioSection.badges: [
+    _Field('title', 'Badge', required: true, hint: 'e.g. AWS Cloud Practitioner'),
+    _Field('issuer', 'Issued by', hint: 'e.g. Credly, Microsoft Learn, Google'),
+    _Field('credential_url', 'Badge link', kind: _Kind.url, hint: 'credly.com/badges/…'),
     _Field('date_earned', 'Date earned', kind: _Kind.date),
   ],
   PortfolioSection.leadership: [

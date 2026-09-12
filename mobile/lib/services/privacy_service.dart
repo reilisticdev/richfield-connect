@@ -209,7 +209,12 @@ class PrivacyService {
       throw const AuthException('Administrator accounts can\'t be deleted from the app.');
     }
 
-    for (final bucket in [MediaService.avatarsBucket, MediaService.postMediaBucket, verificationDocsBucket]) {
+    for (final bucket in [
+      MediaService.avatarsBucket,
+      MediaService.postMediaBucket,
+      MediaService.cvsBucket,
+      verificationDocsBucket,
+    ]) {
       final storage = _client.storage.from(bucket);
       final paths = <String>[];
       for (var offset = 0;; offset += 100) {
