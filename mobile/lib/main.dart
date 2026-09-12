@@ -104,6 +104,15 @@ void main() async {
   // confirmed" once. Not awaited: nothing here depends on it.
   unawaited(EmailConfirmation.listenForDeepLink());
   final authService = AuthService(Supabase.instance.client);
+  // richfield://auth/recovery (reset link tapped on this phone): once the
+  // session lands, the router parks it on /reset-password. A later ordinary
+  // sign-in clears the flag (AuthService.signIn) if the exchange never
+  // completed, so nobody is sent to "set a new password" by mistake.
+  EmailConfirmation.recoveryLinkOpened.addListener(() {
+    if (!EmailConfirmation.recoveryLinkOpened.value) return;
+    EmailConfirmation.recoveryLinkOpened.value = false;
+    authService.recoveryPending = true;
+  });
 
   // Writes the device's FCM token onto whichever profile is signed in.
   // Has to happen here, not inside PushNotificationService.initialize()
@@ -112,9 +121,13 @@ void main() async {
   // fresh sign-in (the stream fires) and reopening the app with an
   // existing session (the explicit call right after covers the case
   // where the stream's initial emission is missed by subscribing late).
-  Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-    unawaited(PushNotificationService.syncTokenIfSignedIn());
-  });
+  // onError: a failed deep-link code exchange (confirmation link opened on
+  // the wrong device, or used twice) is delivered as an error on this
+  // stream; without a handler it was an "Unhandled Exception" in logcat.
+  Supabase.instance.client.auth.onAuthStateChange.listen(
+    (_) => unawaited(PushNotificationService.syncTokenIfSignedIn()),
+    onError: (_) {},
+  );
   unawaited(PushNotificationService.syncTokenIfSignedIn());
 
   runApp(RichfieldConnectApp(authService: authService));
@@ -1063,10 +1076,26 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  Timer? _confirmedLinkTimer;
+
   @override
   void initState() {
     super.initState();
     _errorMessage = widget.notice;
+    EmailConfirmation.justConfirmed.addListener(_onConfirmationLink);
+  }
+
+  /// The confirmation link opened the app but no session followed: the
+  /// code was minted on another device, or already used. GoTrue confirmed
+  /// the address before redirecting, so say that instead of nothing.
+  void _onConfirmationLink() {
+    if (!EmailConfirmation.justConfirmed.value) return;
+    _confirmedLinkTimer?.cancel();
+    _confirmedLinkTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || widget.authService.currentSession != null) return;
+      EmailConfirmation.justConfirmed.value = false;
+      setState(() => _errorMessage = 'Your email is confirmed. Sign in to continue.');
+    });
   }
 
   Future<void> _resendConfirmation() async {
@@ -1089,6 +1118,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _confirmedLinkTimer?.cancel();
+    EmailConfirmation.justConfirmed.removeListener(_onConfirmationLink);
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();

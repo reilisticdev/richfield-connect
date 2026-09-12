@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
 import '../services/email_confirmation.dart';
+import '../screens/reset_password_screen.dart';
 // main.dart imports this file for buildAppRouter(), and this file imports
 // main.dart back for the real screen widgets (LoginScreen, RegisterScreen,
 // RootShell, RichfieldRole) — a legal, ordinary circular import in Dart.
@@ -23,7 +24,13 @@ import '../main.dart';
 class GoRouterRefreshStream extends ChangeNotifier {
   GoRouterRefreshStream(Stream<dynamic> stream) {
     notifyListeners();
-    _subscription = stream.asBroadcastStream().listen((_) => notifyListeners());
+    // onError too: supabase_flutter reports a failed deep-link code exchange
+    // (link opened on the wrong device, code already used) as a stream
+    // error. Without a handler that was an unhandled exception; with one
+    // the router simply re-evaluates and stays on /login.
+    _subscription = stream
+        .asBroadcastStream()
+        .listen((_) => notifyListeners(), onError: (_) => notifyListeners());
   }
 
   late final StreamSubscription<dynamic> _subscription;
@@ -53,6 +60,11 @@ GoRouter buildAppRouter(AuthService authService) {
       final requiresMfaSetup = user.appMetadata['requires_mfa_setup'] == true;
       if (requiresMfaSetup && state.matchedLocation != '/mfa-setup') {
         return '/mfa-setup';
+      }
+
+      // Signed in from a password-reset link/code: finish that first.
+      if (authService.recoveryPending && state.matchedLocation != '/reset-password') {
+        return '/reset-password';
       }
 
       // A session that exists on the phone can already be dead on the
@@ -132,6 +144,10 @@ GoRouter buildAppRouter(AuthService authService) {
       ),
       GoRoute(path: '/signup', builder: (context, state) => RegisterScreen(authService: authService)),
       GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
+      GoRoute(
+        path: '/reset-password',
+        builder: (context, state) => ResetPasswordScreen(authService: authService),
+      ),
       GoRoute(
         path: '/pending-approval',
         builder: (context, state) => AccountStatusScreen(authService: authService, status: 'pending'),

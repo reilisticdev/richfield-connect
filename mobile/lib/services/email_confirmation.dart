@@ -46,10 +46,15 @@ class EmailConfirmation {
     links.uriLinkStream.listen(_onLink, onError: (_) {});
   }
 
+  /// Set when the app was opened by richfield://auth/recovery (the
+  /// password-reset link tapped on the phone). AuthService.recoveryPending
+  /// is what the router acts on; this is the earlier, link-level signal.
+  static final ValueNotifier<bool> recoveryLinkOpened = ValueNotifier<bool>(false);
+
   static void _onLink(Uri uri) {
-    if (uri.scheme == 'richfield' && uri.host == 'auth' && uri.path == '/confirmed') {
-      justConfirmed.value = true;
-    }
+    if (uri.scheme != 'richfield' || uri.host != 'auth') return;
+    if (uri.path == '/confirmed') justConfirmed.value = true;
+    if (uri.path == '/recovery') recoveryLinkOpened.value = true;
   }
 
   /// Shows the welcome once, if one is due. Call after a signed-in screen's

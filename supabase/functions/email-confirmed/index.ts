@@ -27,6 +27,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const APP_LINK = "richfield://auth/confirmed";
+const APP_RECOVERY_LINK = "richfield://auth/recovery";
 
 const CONFIRMED = `Richfield Connect
 
@@ -34,6 +35,13 @@ Your email is confirmed. Your account is good to go.
 
 Open the Richfield Connect app on your phone and sign in with your email and password.
 (Alumni and business accounts are then reviewed by a Richfield administrator before you can use the app.)
+`;
+
+const RESET_VERIFIED = `Richfield Connect
+
+Your password-reset link is verified.
+
+Open the Richfield Connect app on your phone: enter the 6-digit code from the same email under Forgot password, together with your new password.
 `;
 
 const EXPIRED = `Richfield Connect
@@ -66,16 +74,21 @@ Deno.serve((req: Request) => {
     url.searchParams.has("error_description");
   if (failed) return text(EXPIRED);
 
+  // resetPasswordForEmail() redirects here with ?flow=recovery (when that
+  // URL is allow-listed; otherwise GoTrue falls back to the Site URL, i.e.
+  // this function without the flag, and the phone path still works).
+  const recovery = url.searchParams.get("flow") === "recovery";
+
   if (isPhone(req.headers.get("user-agent") ?? "")) {
     // Forward the query string (PKCE `code`) so the app can finish sign-in.
     return new Response(null, {
       status: 302,
       headers: {
-        "Location": APP_LINK + url.search,
+        "Location": (recovery ? APP_RECOVERY_LINK : APP_LINK) + url.search,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
       },
     });
   }
-  return text(CONFIRMED);
+  return text(recovery ? RESET_VERIFIED : CONFIRMED);
 });

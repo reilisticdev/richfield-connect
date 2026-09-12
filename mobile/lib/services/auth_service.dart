@@ -18,9 +18,20 @@ import 'profile_service.dart';
 enum SignupRole { student, alumni, business }
 
 class AuthService {
-  AuthService(this._client);
+  AuthService(this._client) {
+    // GoTrue emits passwordRecovery when a session came from a reset link
+    // (the phone deep-link path). The router parks that session on
+    // /reset-password until updatePassword() clears the flag.
+    _client.auth.onAuthStateChange.listen((state) {
+      if (state.event == AuthChangeEvent.passwordRecovery) recoveryPending = true;
+    }, onError: (_) {});
+  }
 
   final SupabaseClient _client;
+
+  /// True between "signed in from a password-reset link/code" and
+  /// "saved a new password". Read by the router's redirect.
+  bool recoveryPending = false;
 
   Session? get currentSession => _client.auth.currentSession;
   User? get currentUser => _client.auth.currentUser;
@@ -114,6 +125,9 @@ class AuthService {
     required String email,
     required String password,
   }) {
+    // A password sign-in is not a recovery, whatever a stale reset link
+    // left behind.
+    recoveryPending = false;
     return _client.auth.signInWithPassword(email: email, password: password);
   }
 
@@ -129,7 +143,33 @@ class AuthService {
   /// configured Site URL. Set a deep link later if the reset should reopen
   /// the app instead of a browser.
   Future<void> sendPasswordReset(String email) {
-    return _client.auth.resetPasswordForEmail(email.trim());
+    return _client.auth.resetPasswordForEmail(
+      email.trim(),
+      // The email-confirmed function reads ?flow=recovery: phones are sent
+      // to richfield://auth/recovery, laptops get reset-specific text. If
+      // this exact URL isn't allow-listed GoTrue falls back to the Site URL
+      // (the same function without the flag) — the phone path still works,
+      // only the laptop wording is generic.
+      redirectTo: '${SupabaseConfig.emailConfirmedUrl}?flow=recovery',
+    );
+  }
+
+  /// The 6-digit code from the password-reset email ({{ .Token }} in the
+  /// "Reset password" template). Signs the member in so [updatePassword]
+  /// can run — no browser, whichever device read the email.
+  Future<AuthResponse> verifyRecoveryCode({required String email, required String code}) async {
+    final response = await _client.auth.verifyOTP(
+      type: OtpType.recovery,
+      email: email.trim(),
+      token: code.trim(),
+    );
+    recoveryPending = true;
+    return response;
+  }
+
+  Future<void> updatePassword(String newPassword) async {
+    await _client.auth.updateUser(UserAttributes(password: newPassword));
+    recoveryPending = false;
   }
 
   /// Signs out everywhere. If GoTrue refuses the server-side part — the
@@ -164,6 +204,7 @@ class AuthService {
   }
 
   void _clearProfileCache() {
+    recoveryPending = false;
     _cachedProfile = null;
     _cachedProfileUserId = null;
     _cachedProfileAt = null;
