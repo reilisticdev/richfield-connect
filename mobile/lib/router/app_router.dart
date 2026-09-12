@@ -43,67 +43,92 @@ GoRouter buildAppRouter(AuthService authService) {
       final loggingInPaths = {'/login', '/signup'};
       final isGoingToAuth = loggingInPaths.contains(state.matchedLocation);
 
-      // Not logged in and not headed to an auth page -> send to login.
-      if (!loggedIn && !isGoingToAuth) {
-        return '/login';
+      // No session: auth pages are fine, everything else goes to login.
+      if (!loggedIn) {
+        return isGoingToAuth ? null : '/login';
       }
 
-      // Logged in and sitting on an auth page -> send into the app.
-      if (loggedIn && isGoingToAuth) {
+      final user = authService.currentUser!;
+      final requiresMfaSetup = user.appMetadata['requires_mfa_setup'] == true;
+      if (requiresMfaSetup && state.matchedLocation != '/mfa-setup') {
+        return '/mfa-setup';
+      }
+
+      // A session that exists on the phone can already be dead on the
+      // server: an administrator removed the account (auth user and profile
+      // row gone), or suspended it (GoTrue revoked the sessions; the access
+      // token keeps working only until it expires). That has to be resolved
+      // BEFORE the "logged in on an auth page -> /home" bounce below. With
+      // the order the other way round the app looped:
+      //   /home -> no profile row -> /login -> has a session -> /home -> ...
+      // until GoRouter threw "redirect loop detected" (Keshav, testing
+      // admin remove, 2026-09-12).
+      //
+      // account_status / role live in `profiles`, not the JWT, so this is a
+      // real fetch; AuthService.fetchOwnProfile() caches it for a short TTL.
+      Map<String, dynamic>? profile;
+      try {
+        profile = await authService.fetchOwnProfile();
+      } on PostgrestException catch (e) {
+        if (_sessionIsDead(e)) {
+          // Drop the dead token on this device (a server-side sign-out
+          // would fail: the user is gone or banned). The refresh stream
+          // then re-runs this redirect with no session, and /login is a
+          // stable stop instead of a bounce.
+          await authService.signOutLocally();
+          return _toLogin(state, reason: e.code == 'PGRST116' ? 'removed' : 'signed-out');
+        }
+        // Any other Postgrest error (transient 5xx, a momentary RLS or
+        // connection hiccup) must NOT force a logout mid-session.
+      } on AuthException catch (_) {
+        // The token was refused outright: expired and the refresh failed,
+        // which is what a ban looks like once the old token runs out.
+        await authService.signOutLocally();
+        return _toLogin(state, reason: 'signed-out');
+      } catch (_) {
+        // Non-Postgrest failure (e.g. a dropped connection). Same
+        // reasoning — don't force a logout over a transient error.
+      }
+
+      // Live session sitting on an auth page -> into the app.
+      if (isGoingToAuth) {
         return '/home';
       }
 
-      // Logged in: check profile-level gates that a session alone doesn't
-      // tell you (pending approval, forced MFA setup, admin-only routes).
-      if (loggedIn) {
-        final user = authService.currentUser!;
-        final requiresMfaSetup = user.appMetadata['requires_mfa_setup'] == true;
+      // Profile-level gates a session alone can't tell you (pending
+      // approval, suspension, admin-only routes). A null profile here means
+      // a transient fetch failure; stay on the current route.
+      if (profile != null) {
+        final accountStatus = profile['account_status'] as String?;
+        final role = profile['role'] as String?;
 
-        if (requiresMfaSetup && state.matchedLocation != '/mfa-setup') {
-          return '/mfa-setup';
+        if (accountStatus == 'pending' && state.matchedLocation != '/pending-approval') {
+          return '/pending-approval';
         }
-
-        // account_status / role live in `profiles`, not the JWT, so this
-        // needs an actual fetch. AuthService.fetchOwnProfile() caches this
-        // for a short TTL so it isn't a full round trip on every navigation.
-        try {
-          final profile = await authService.fetchOwnProfile();
-          final accountStatus = profile['account_status'] as String?;
-          final role = profile['role'] as String?;
-
-          if (accountStatus == 'pending' && state.matchedLocation != '/pending-approval') {
-            return '/pending-approval';
-          }
-          if (accountStatus == 'rejected' && state.matchedLocation != '/account-rejected') {
-            return '/account-rejected';
-          }
-          // Migration 033 also bans a suspended account, so this only covers
-          // the minutes until the current access token expires.
-          if (accountStatus == 'suspended' && state.matchedLocation != '/account-suspended') {
-            return '/account-suspended';
-          }
-          if (state.matchedLocation.startsWith('/admin') && role != 'administrator') {
-            return '/home'; // not an admin — bounce, don't 403 silently
-          }
-        } on PostgrestException catch (e) {
-          // PGRST116 = .single() found zero (or >1) rows: genuinely no
-          // profile row exists yet for this signed-in user — treat as
-          // not-yet-provisioned. Any other Postgrest error (transient 5xx,
-          // a momentary RLS/connection hiccup) must NOT force a logout
-          // mid-session — stay on the current route instead.
-          if (e.code == 'PGRST116') {
-            return '/login';
-          }
-        } catch (_) {
-          // Non-Postgrest failure (e.g. a dropped connection). Same
-          // reasoning — don't force a logout over a transient error.
+        if (accountStatus == 'rejected' && state.matchedLocation != '/account-rejected') {
+          return '/account-rejected';
+        }
+        // Migration 033 also bans a suspended account, so this only covers
+        // the minutes until the current access token expires; after that
+        // the AuthException branch above signs the device out.
+        if (accountStatus == 'suspended' && state.matchedLocation != '/account-suspended') {
+          return '/account-suspended';
+        }
+        if (state.matchedLocation.startsWith('/admin') && role != 'administrator') {
+          return '/home'; // not an admin — bounce, don't 403 silently
         }
       }
 
       return null; // no redirect needed
     },
     routes: [
-      GoRoute(path: '/login', builder: (context, state) => LoginScreen(authService: authService)),
+      GoRoute(
+        path: '/login',
+        builder: (context, state) => LoginScreen(
+          authService: authService,
+          notice: _loginNotice(state.uri.queryParameters['reason']),
+        ),
+      ),
       GoRoute(path: '/signup', builder: (context, state) => RegisterScreen(authService: authService)),
       GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
       GoRoute(
@@ -124,6 +149,26 @@ GoRouter buildAppRouter(AuthService authService) {
     ],
   );
 }
+
+/// PGRST116: `.single()` found no row — the profile is gone. A signed-in
+/// user with no profile row can only mean the account was removed
+/// (handle_new_user() creates the row in the same transaction as the auth
+/// user). PGRST301/302/303: PostgREST refused the JWT itself.
+bool _sessionIsDead(PostgrestException e) =>
+    e.code == 'PGRST116' || e.code == 'PGRST301' || e.code == 'PGRST302' || e.code == 'PGRST303';
+
+/// Route to /login with a reason the screen can explain. Returning null
+/// when already on /login is what ends the redirect chain.
+String? _toLogin(GoRouterState state, {required String reason}) {
+  if (state.matchedLocation == '/login') return null;
+  return '/login?reason=$reason';
+}
+
+String? _loginNotice(String? reason) => switch (reason) {
+      'removed' => 'This account is no longer active. Sign in with another account or register a new one.',
+      'signed-out' => 'Your session has ended. Please sign in again.',
+      _ => null,
+    };
 
 // role/account_status live in Postgres, not the JWT, and GoRoute.builder is
 // synchronous — this fetches the profile once to decide which RichfieldRole
