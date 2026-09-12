@@ -28,6 +28,8 @@ dependencies:
   # AiService's HTTP client for the /ai/ Flask microservice.
   http: ^1.6.0
   file_selector: ^1.1.0
+  video_compress: ^3.1.4
+  video_player: ^2.14.0
 
 dev_dependencies:
   flutter_test:

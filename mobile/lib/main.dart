@@ -58,6 +58,7 @@ import 'services/push_notification_service.dart';
 import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
+import 'widgets/post_video_player.dart';
 import 'screens/career_pathways_screen.dart';
 import 'screens/events_screen.dart';
 import 'services/profile_context_service.dart';
@@ -443,6 +444,12 @@ class FeedPost {
   /// the post-media bucket). Null for text-only and video posts.
   final String? imageUrl;
 
+  /// Public CDN urls for a video post (posts.video_path / thumbnail_path in
+  /// the same bucket). The card shows the thumbnail and only opens the
+  /// stream when the member taps play.
+  final String? videoUrl;
+  final String? thumbnailUrl;
+
   /// Whether the signed-in user has already reposted this.
   final bool isReposted;
 
@@ -467,6 +474,8 @@ class FeedPost {
     this.id,
     this.authorId,
     this.imageUrl,
+    this.videoUrl,
+    this.thumbnailUrl,
     this.isReposted = false,
     this.isReacted = false,
     required this.type,
@@ -494,6 +503,8 @@ class FeedPost {
       id: id,
       authorId: authorId,
       imageUrl: imageUrl,
+      videoUrl: videoUrl,
+      thumbnailUrl: thumbnailUrl,
       isReposted: isReposted ?? this.isReposted,
       isReacted: isReacted ?? this.isReacted,
       type: type,
@@ -521,6 +532,8 @@ FeedPost _feedPostFromRow(
   final profile = row['profiles'] as Map<String, dynamic>?;
   final id = row['id'] as String?;
   final imagePath = row['image_path'] as String?;
+  final videoPath = row['video_path'] as String?;
+  final thumbnailPath = row['thumbnail_path'] as String?;
   final name = ('${profile?['first_name'] ?? ''} ${profile?['last_name'] ?? ''}').trim();
   final role = profile?['role'] as String?;
   final createdAt = DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now();
@@ -529,6 +542,12 @@ FeedPost _feedPostFromRow(
     authorId: row['author_id'] as String?,
     imageUrl: (imagePath != null && imagePath.isNotEmpty && mediaService != null)
         ? mediaService.postImageUrl(imagePath)
+        : null,
+    videoUrl: (videoPath != null && videoPath.isNotEmpty && mediaService != null)
+        ? mediaService.postVideoUrl(videoPath)
+        : null,
+    thumbnailUrl: (thumbnailPath != null && thumbnailPath.isNotEmpty && mediaService != null)
+        ? mediaService.postImageUrl(thumbnailPath)
         : null,
     isReposted: id != null && repostedIds.contains(id),
     isReacted: id != null && reactedIds.contains(id),
@@ -3193,9 +3212,9 @@ class _TextPostCard extends StatelessWidget {
   }
 }
 
-/// A post with a video attached. There is no in-app player yet, so this no
-/// longer draws a play button that doesn't play, or a "1.4k Plays" count that
-/// was really the repost total divided by 1000.
+/// A post with a video attached. The media area is PostVideoPlayer: poster
+/// frame first, real playback on tap. The gradient placeholder below it only
+/// remains for a row whose video_path can't be resolved to a URL.
 class _VideoPostCard extends StatelessWidget {
   final FeedPost post;
   final VoidCallback? onRepost;
@@ -3222,6 +3241,13 @@ class _VideoPostCard extends StatelessWidget {
               child: Text(post.body, style: AppText.bodyMd()),
             ),
           SizedBox(height: AppSpace.sm),
+          if (post.videoUrl != null)
+            PostVideoPlayer(
+              videoUrl: post.videoUrl!,
+              thumbnailUrl: post.thumbnailUrl,
+              label: post.videoLabel,
+            )
+          else
           AspectRatio(
             aspectRatio: 16 / 10,
             child: Stack(
@@ -3295,19 +3321,29 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   /// button never touched device storage, and there was no picker plugin
   /// in pubspec.yaml for it to call even if it had wanted to.
   PickedMedia? _attachment;
+
+  /// Video mode's attachment. Picked, transcoded on-device and thumbnailed
+  /// before it is ever shown with a size; null until compression finishes.
+  PickedVideo? _video;
+
+  /// 0–100 while video_compress is running; null the rest of the time.
+  double? _compressPercent;
   String? _error;
 
   @override
   void dispose() {
+    if (_compressPercent != null) {
+      // Leaving the screen mid-encode: stop burning the CPU on a result
+      // nobody will see.
+      unawaited(_mediaService.cancelCompression());
+    }
     _bodyController.dispose();
     super.dispose();
   }
 
   Future<void> _pickAttachment() async {
     if (_isVideo) {
-      // Video capture/compression is genuinely not built (rubric 8.4).
-      // Say so plainly rather than pretending a file was attached.
-      setState(() => _error = 'Video posting isn\'t available yet — post an image or text for now.');
+      await _pickVideo();
       return;
     }
     try {
@@ -3327,6 +3363,71 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     }
   }
 
+  /// Record with the camera or choose from the gallery, then transcode on
+  /// the device straight away so the preview card can show the real size
+  /// that will be uploaded — not the 60 MB the phone recorded.
+  Future<void> _pickVideo() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.videocam_outlined, color: AppColors.primary),
+              title: Text('Record a video'),
+              subtitle: Text('Up to ${MediaService.maxVideoSeconds} seconds'),
+              onTap: () => Navigator.pop(sheet, ImageSource.camera),
+            ),
+            ListTile(
+              leading: Icon(Icons.video_library_outlined, color: AppColors.primary),
+              title: Text('Choose from gallery'),
+              subtitle: Text('Compressed on your phone before upload'),
+              onTap: () => Navigator.pop(sheet, ImageSource.gallery),
+            ),
+            SizedBox(height: AppSpace.sm),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    try {
+      final picked = await _mediaService.pickVideo(source: source);
+      // null = the user backed out of the camera/gallery. Not an error.
+      if (picked == null || !mounted) return;
+
+      setState(() {
+        _video = null;
+        _compressPercent = 0;
+        _error = null;
+      });
+      final video = await _mediaService.compressVideo(
+        picked,
+        onProgress: (percent) {
+          if (mounted) setState(() => _compressPercent = percent);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _video = video;
+        _compressPercent = null;
+      });
+    } on MediaException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _compressPercent = null;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _compressPercent = null;
+        _error = AuthErrorMapper.fromAny(e);
+      });
+    }
+  }
+
   Future<void> _submit() async {
     final body = _bodyController.text.trim();
 
@@ -3334,12 +3435,17 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     // Publish with an empty body — or with an expired session — did
     // nothing at all: no message, no spinner, no error. That silent no-op
     // is what got reported as 'student posts aren\'t reaching Supabase'.
-    if (body.isEmpty && _attachment == null) {
-      setState(() => _error = 'Write something or attach an image before posting.');
-      return;
-    }
     if (_isVideo) {
-      setState(() => _error = 'Video posting isn\'t available yet — post an image or text for now.');
+      if (_compressPercent != null) {
+        setState(() => _error = 'Wait for the video to finish compressing.');
+        return;
+      }
+      if (_video == null) {
+        setState(() => _error = 'Record or choose a video before posting.');
+        return;
+      }
+    } else if (body.isEmpty && _attachment == null) {
+      setState(() => _error = 'Write something or attach an image before posting.');
       return;
     }
 
@@ -3358,7 +3464,16 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
       // Upload first, then insert. If storage fails we must not leave a
       // posts row pointing at an object that was never written.
       String? imagePath;
-      if (_attachment != null) {
+      String? videoPath;
+      String? thumbnailPath;
+      if (_isVideo) {
+        final uploaded = await _mediaService.uploadPostVideo(
+          userId: authorId,
+          video: _video!,
+        );
+        videoPath = uploaded.videoPath;
+        thumbnailPath = uploaded.thumbnailPath;
+      } else if (_attachment != null) {
         imagePath = await _mediaService.uploadPostImage(
           userId: authorId,
           media: _attachment!,
@@ -3369,7 +3484,14 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
         authorId: authorId,
         body: body,
         imagePath: imagePath,
+        videoPath: videoPath,
+        thumbnailPath: thumbnailPath,
       );
+
+      if (videoPath != null) {
+        // The transcoded copy and its poster are safely in the bucket now.
+        await _mediaService.clearVideoCache();
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3418,11 +3540,90 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           ),
           SizedBox(height: AppSpace.md),
           OutlinedButton.icon(
-            onPressed: _submitting ? null : _pickAttachment,
-            icon: Icon(_isVideo ? Icons.video_library_outlined : Icons.image_outlined),
-            label: Text(_attachment != null ? 'Change image' : 'Add image from device'),
+            onPressed: (_submitting || _compressPercent != null) ? null : _pickAttachment,
+            icon: Icon(_isVideo ? Icons.videocam_outlined : Icons.image_outlined),
+            label: Text(_isVideo
+                ? (_video != null ? 'Change video' : 'Record or choose a video')
+                : (_attachment != null ? 'Change image' : 'Add image from device')),
           ),
-          if (_attachment != null) ...[
+          if (_isVideo && _compressPercent != null) ...[
+            SizedBox(height: AppSpace.sm),
+            RoundedCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.compress, size: 18, color: AppColors.primary),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Compressing on your phone… ${_compressPercent!.round()}%',
+                          style: AppText.labelMd(),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => _mediaService.cancelCompression(),
+                        child: Text('Cancel'),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: AppSpace.sm),
+                  LinearProgressIndicator(value: (_compressPercent! / 100).clamp(0.0, 1.0)),
+                ],
+              ),
+            ),
+          ],
+          if (_isVideo && _video != null) ...[
+            SizedBox(height: AppSpace.sm),
+            RoundedCard(
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                    child: Image.file(
+                      _video!.thumbnail,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 56,
+                        height: 56,
+                        color: AppColors.surfaceContainerHigh,
+                        child: Icon(Icons.videocam_outlined, color: AppColors.onSurfaceVariant),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_video!.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.labelMd()),
+                        // The before → after size is the whole point of
+                        // on-device compression; show it, don't claim it.
+                        Text(
+                          '${_video!.readableDuration} · '
+                          '${_video!.readableOriginalSize} → ${_video!.readableSize}'
+                          '${_video!.percentSaved != null ? ' (${_video!.percentSaved}% smaller)' : ''}',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Remove video',
+                    onPressed: _submitting ? null : () => setState(() => _video = null),
+                    icon: Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (!_isVideo && _attachment != null) ...[
             SizedBox(height: AppSpace.sm),
             RoundedCard(
               child: Row(

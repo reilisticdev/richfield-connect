@@ -96,7 +96,8 @@ class FeedService {
   }
 
   /// Creates a post. `imagePath` is a storage object key produced by
-  /// MediaService.uploadPostImage — upload first, then persist the path, so
+  /// MediaService.uploadPostImage; `videoPath` + `thumbnailPath` come from
+  /// MediaService.uploadPostVideo — upload first, then persist the paths, so
   /// a failed upload never leaves a row pointing at a missing object.
   ///
   /// `.select().single()` is intentional: a bare insert resolves without
@@ -108,6 +109,7 @@ class FeedService {
     required String body,
     String? imagePath,
     String? videoPath,
+    String? thumbnailPath,
   }) async {
     return await _client
         .from('posts')
@@ -116,6 +118,7 @@ class FeedService {
           'body': body,
           if (imagePath != null) 'image_path': imagePath,
           if (videoPath != null) 'video_path': videoPath,
+          if (thumbnailPath != null) 'thumbnail_path': thumbnailPath,
         })
         .select()
         .single();
