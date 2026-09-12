@@ -2,7 +2,10 @@
 //
 // Everything the Career AI assistant knows about the signed-in user, loaded
 // in one parallel round trip: the profiles row plus the separate skills,
-// education, work_experience, projects and certifications tables.
+// education, work_experience, projects, certifications and badges tables.
+// The Employability Score (employability_score.dart) is computed from the
+// same load, so the dashboard and the assistant never disagree about what
+// is on the profile.
 //
 // Two jobs:
 //   1. steps — which onboarding steps are actually done. Drives the progress
@@ -43,6 +46,7 @@ class ProfileContext {
     required this.workExperience,
     required this.projects,
     required this.certifications,
+    this.badges = const [],
   });
 
   final Map<String, dynamic> profile;
@@ -51,6 +55,7 @@ class ProfileContext {
   final List<Map<String, dynamic>> workExperience;
   final List<Map<String, dynamic>> projects;
   final List<Map<String, dynamic>> certifications;
+  final List<Map<String, dynamic>> badges;
 
   String text(String key) => (profile[key] as String?)?.trim() ?? '';
   bool has(String key) => text(key).isNotEmpty;
@@ -135,6 +140,8 @@ class ProfileContext {
       'career_interests': text('career_interests'),
       'bio': text('bio'),
       'has_profile_photo': has('avatar_path'),
+      'has_cv': has('cv_path'),
+      'badge_count': badges.length,
       'links': {
         'github': has('github_url'),
         'linkedin': has('linkedin_url'),
@@ -176,7 +183,7 @@ class ProfileContextService {
       _client
           .from('profiles')
           .select('first_name, last_name, role, professional_headline, career_interests, '
-              'bio, avatar_path, github_url, linkedin_url, website_url')
+              'bio, avatar_path, github_url, linkedin_url, website_url, cv_path')
           .eq('id', userId)
           .single(),
       _client.from('skills').select('id, skill_name').eq('profile_id', userId).order('created_at'),
@@ -191,6 +198,7 @@ class ProfileContextService {
           .eq('profile_id', userId),
       _client.from('projects').select('title, description').eq('profile_id', userId),
       _client.from('certifications').select('title, issuer').eq('profile_id', userId),
+      _client.from('badges').select('id').eq('profile_id', userId),
     ]);
 
     List<Map<String, dynamic>> rows(int i) => List<Map<String, dynamic>>.from(results[i] as List);
@@ -202,6 +210,7 @@ class ProfileContextService {
       workExperience: rows(3),
       projects: rows(4),
       certifications: rows(5),
+      badges: rows(6),
     );
   }
 }

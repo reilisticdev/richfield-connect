@@ -4,13 +4,19 @@
 // engagement with the student's posts, profile completeness against their
 // programme, and which of their skills businesses search for. All five RPCs
 // (migrations 017/018) are SECURITY DEFINER and scope to auth.uid() inside
-// the function, so none of them takes a profile id.
+// the function, so none of them takes a profile id. The Employability Score
+// tile is the exception: it is computed on the device from the same rows
+// the Career AI loads (ProfileContextService), see employability_score.dart
+// for why it isn't read back from get_student_completeness().
 //
 // The screen used to be a StatelessWidget of literals — '482' profile views,
 // '1.4k' engagement, a "chart" whose points alternated on i.isEven, and
 // "more complete than 68% of students in your programme" for every account.
 
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'employability_score.dart';
+import 'profile_context_service.dart';
 
 class StudentAnalytics {
   const StudentAnalytics({
@@ -23,6 +29,7 @@ class StudentAnalytics {
     required this.myCompleteness,
     required this.programmeAverage,
     required this.searchedSkills,
+    required this.employability,
   });
 
   final int days;
@@ -43,6 +50,9 @@ class StudentAnalytics {
 
   final List<MapEntry<String, int>> searchedSkills;
 
+  /// Null only when there is no signed-in user to score.
+  final EmployabilityScore? employability;
+
   int get totalProfileViews => dailyProfileViews.fold(0, (sum, n) => sum + n);
 }
 
@@ -52,12 +62,14 @@ class StudentAnalyticsService {
   final SupabaseClient _client;
 
   Future<StudentAnalytics> load({int days = 30}) async {
+    final userId = _client.auth.currentUser?.id;
     final results = await Future.wait<dynamic>([
       _client.rpc('get_student_profile_views', params: {'days': days}),
       _client.rpc('get_student_connection_growth', params: {'days': days}),
       _client.rpc('get_student_engagement'),
       _client.rpc('get_student_completeness'),
       _client.rpc('get_student_top_searched_skills'),
+      if (userId != null) ProfileContextService(_client).load(userId),
     ]);
 
     List<Map<String, dynamic>> rows(int i) => List<Map<String, dynamic>>.from(results[i] as List);
@@ -91,6 +103,7 @@ class StudentAnalyticsService {
           if ((r['skill_name'] as String?)?.isNotEmpty ?? false)
             MapEntry(r['skill_name'] as String, asInt(r['search_count'])),
       ],
+      employability: results.length > 5 ? EmployabilityScore.fromContext(results[5] as ProfileContext) : null,
     );
   }
 }
