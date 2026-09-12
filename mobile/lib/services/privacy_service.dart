@@ -209,19 +209,22 @@ class PrivacyService {
       throw const AuthException('Administrator accounts can\'t be deleted from the app.');
     }
 
-    for (final bucket in [
-      MediaService.avatarsBucket,
-      MediaService.postMediaBucket,
-      MediaService.cvsBucket,
-      verificationDocsBucket,
+    // list() is one level deep, so the per-application CV snapshots in
+    // cvs/<uid>/applications/ (migration 039) need their own pass.
+    for (final (bucket, folder) in [
+      (MediaService.avatarsBucket, userId),
+      (MediaService.postMediaBucket, userId),
+      (MediaService.cvsBucket, '$userId/applications'),
+      (MediaService.cvsBucket, userId),
+      (verificationDocsBucket, userId),
     ]) {
       final storage = _client.storage.from(bucket);
       final paths = <String>[];
       for (var offset = 0;; offset += 100) {
-        final page = await storage.list(path: userId, searchOptions: SearchOptions(limit: 100, offset: offset));
+        final page = await storage.list(path: folder, searchOptions: SearchOptions(limit: 100, offset: offset));
         paths.addAll([
           for (final file in page)
-            if (file.id != null) '$userId/${file.name}',
+            if (file.id != null) '$folder/${file.name}',
         ]);
         if (page.length < 100) break;
       }

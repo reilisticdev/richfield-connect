@@ -38,11 +38,24 @@ class JobsService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  Future<void> apply({required String opportunityId, required String studentId}) {
-    return _client.from('applications').insert({
-      'opportunity_id': opportunityId,
-      'student_id': studentId,
-    });
+  /// `cvPath` is the per-application snapshot from
+  /// MediaService.snapshotCvForApplication (null when the member has no CV
+  /// on file). `.select().single()` so an RLS-rejected insert surfaces as
+  /// an exception instead of a silent "Applied" toast.
+  Future<void> apply({
+    required String opportunityId,
+    required String studentId,
+    String? cvPath,
+  }) async {
+    await _client
+        .from('applications')
+        .insert({
+          'opportunity_id': opportunityId,
+          'student_id': studentId,
+          if (cvPath != null) 'cv_path': cvPath,
+        })
+        .select('id')
+        .single();
   }
 
   /// Applicants to one of the caller's own opportunities, newest first.
@@ -57,7 +70,7 @@ class JobsService {
   Future<List<Map<String, dynamic>>> fetchApplicants({required String opportunityId}) async {
     final rows = await _client
         .from('applications')
-        .select('student_id, status, applied_at, '
+        .select('student_id, status, applied_at, cv_path, '
             'profiles(first_name, last_name, professional_headline)')
         .eq('opportunity_id', opportunityId)
         .order('applied_at', ascending: false);

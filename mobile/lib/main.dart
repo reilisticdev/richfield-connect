@@ -2363,9 +2363,27 @@ class ApplicantsScreen extends StatefulWidget {
 
 class _ApplicantsScreenState extends State<ApplicantsScreen> {
   final _jobsService = JobsService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _applicants = [];
+
+  /// cvs is private; the 039 storage policy lets this business sign a URL
+  /// only for a CV attached to an application on its own listing.
+  Future<void> _openCv(String path) async {
+    try {
+      final url = await _mediaService.cvSignedUrl(path);
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No app on this device could open the PDF.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
 
   @override
   void initState() {
@@ -2429,26 +2447,47 @@ class _ApplicantsScreenState extends State<ApplicantsScreen> {
     final initials = (first.isNotEmpty ? first[0] : '') + (last.isNotEmpty ? last[0] : '');
     final status = row['status'] as String? ?? 'submitted';
     final appliedAt = DateTime.tryParse(row['applied_at'] as String? ?? '');
+    final cvPath = (row['cv_path'] as String?)?.trim();
+    final hasCv = cvPath != null && cvPath.isNotEmpty;
 
     return RoundedCard(
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
-          SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
-                if (headline != null && headline.isNotEmpty)
-                  Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                if (appliedAt != null)
-                  Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              ],
-            ),
+          Row(
+            children: [
+              InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
+                    if (headline != null && headline.isNotEmpty)
+                      Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                    if (appliedAt != null)
+                      Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              _statusPill(status),
+            ],
           ),
-          _statusPill(status),
+          SizedBox(height: AppSpace.sm),
+          // The CV submitted with this application (migration 039), or an
+          // honest note — never a button that opens nothing.
+          hasCv
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _openCv(cvPath),
+                    icon: Icon(Icons.picture_as_pdf_outlined, size: 16),
+                    label: Text('View CV'),
+                  ),
+                )
+              : Text('No CV attached to this application.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
         ],
       ),
     );
@@ -3909,6 +3948,8 @@ class JobsScreen extends StatefulWidget {
 class _JobsScreenState extends State<JobsScreen> {
   final _authService = AuthService(Supabase.instance.client);
   final _jobsService = JobsService(Supabase.instance.client);
+  final _profileService = ProfileService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   final _searchController = TextEditingController();
 
   bool _loading = true;
@@ -4007,14 +4048,76 @@ class _JobsScreenState extends State<JobsScreen> {
     ];
   }
 
+  /// Applying shares the member's CV on file with that employer for this
+  /// application (migration 039). The member is told so before confirming:
+  /// Guidelines 2.1 — a business sees only what a student explicitly makes
+  /// visible, and this is that explicit act. No CV on file is not an error;
+  /// the employer then sees the profile only.
   Future<void> _apply(Map<String, dynamic> job) async {
     final studentId = _authService.currentUser?.id;
     if (studentId == null) return;
+
+    final title = job['title'] as String? ?? 'this opportunity';
+    final businessProfile = (job['profiles'] as Map<String, dynamic>?)?['business_profiles'];
+    final companyRaw =
+        (businessProfile is Map ? businessProfile['company_name'] as String? : null)?.trim();
+    final company = (companyRaw == null || companyRaw.isEmpty) ? 'the employer' : companyRaw;
+
+    String? cvPath;
     try {
-      await _jobsService.apply(opportunityId: job['id'] as String, studentId: studentId);
+      cvPath = (await _profileService.fetchCvStatus(studentId)).path;
+    } catch (_) {
+      // Can't read the CV status: apply without it rather than block.
+    }
+    if (!mounted) return;
+
+    final hasCv = cvPath != null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Apply to $title?'),
+        content: Text(hasCv
+            ? 'Your CV on file will be shared with $company for this application, '
+                'along with your profile.'
+            : 'You have no CV on file, so $company will see your profile only. '
+                'You can add one under Career AI → Import my CV and apply afterwards.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(hasCv ? 'Share CV & apply' : 'Apply anyway'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      String? snapshot;
+      if (cvPath != null) {
+        try {
+          snapshot = await _mediaService.snapshotCvForApplication(
+            userId: studentId,
+            sourcePath: cvPath,
+          );
+        } catch (_) {
+          // The copy is a nicety (the business sees what was submitted even
+          // if the CV changes later). If it fails, attach the live CV
+          // instead — the storage policy accepts either key.
+          snapshot = cvPath;
+        }
+      }
+      await _jobsService.apply(
+        opportunityId: job['id'] as String,
+        studentId: studentId,
+        cvPath: snapshot,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Applied to ${job['title']}.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(snapshot != null
+            ? 'Applied to $title. Your CV was attached.'
+            : 'Applied to $title.'),
+      ));
     } on PostgrestException catch (e) {
       if (!mounted) return;
       final message = e.code == '23505'

@@ -186,6 +186,20 @@ class MediaService {
     await _client.storage.from(cvsBucket).remove([path]);
   }
 
+  /// Copies the member's current CV to a per-application key so the
+  /// business sees exactly what was submitted, even after the member
+  /// replaces or removes the CV on their profile (migration 039). Still
+  /// under the member's own folder, so the owner policies and the
+  /// account-deletion sweep cover it. Returns the new object key.
+  Future<String> snapshotCvForApplication({
+    required String userId,
+    required String sourcePath,
+  }) async {
+    final target = '$userId/applications/${DateTime.now().millisecondsSinceEpoch}.pdf';
+    await _client.storage.from(cvsBucket).copy(sourcePath, target);
+    return target;
+  }
+
   // --- helpers -------------------------------------------------------
 
   String _objectKey({required String userId, required String fileName}) {
