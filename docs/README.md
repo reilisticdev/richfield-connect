@@ -1,4 +1,4 @@
-﻿# Documentation Index
+# Documentation Index
 
 This folder is the entry point for anything that isn't covered in a component's own
 README. Start here, then drill into the folder-level docs.

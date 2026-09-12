@@ -1,4 +1,4 @@
-﻿# Richfield Connect - Mobile App
+# Richfield Connect - Mobile App
 
 Flutter app, the primary product surface for students, alumni, and business users.
 See the [root README](../README.md) for the full project overview and tech stack
@@ -35,7 +35,7 @@ lib/
 
 | Screen | Purpose |
 |---|---|
-| `career_pathways_screen.dart` | Browse/apply to business-posted, admin-approved opportunities |
+| `career_pathways_screen.dart` | Career pathway explorer: where alumni from your programme ended up (jobs are browsed/applied for on the Jobs tab in `main.dart`) |
 | `network_screen.dart` / `member_profile_screen.dart` | Connections and viewing another user's profile |
 | `messages_screen.dart` / `chat_screen.dart` | Direct messaging |
 | `events_screen.dart` | Institutional events feed |

@@ -1,4 +1,4 @@
-﻿# Richfield Connect - Web Admin Panel
+# Richfield Connect - Web Admin Panel
 
 React 19 + Vite single-page app. This is an **administrator-only back office**, not a
 parallel consumer experience - the primary product surface is the mobile app (see
@@ -37,7 +37,7 @@ src/
 |---|---|
 | `Login.jsx` | Admin sign-in (no self-registration - see root README's "Admin provisioning") |
 | `Dashboard.jsx` | Landing overview after login |
-| `Users.jsx` | User management: role changes, account status/suspension |
+| `Users.jsx` | User management: suspend, reactivate and remove accounts (roles are fixed at sign-up) |
 | `Opportunities.jsx` | Review/approve business-posted opportunities |
 | `Events.jsx` | Manage institutional events |
 | `Announcements.jsx` | Broadcast announcements |
