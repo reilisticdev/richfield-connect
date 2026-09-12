@@ -4046,16 +4046,44 @@ class _StudentAnalyticsScreenState extends State<StudentAnalyticsScreen> {
   }
 
   List<Widget> _content(StudentAnalytics data) {
-    final completeness = data.myCompleteness;
+    final employability = data.employability;
     final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
     return [
       _metricGrid([
         ['${data.totalProfileViews}', 'Profile views (${data.days}d)', Icons.visibility_outlined],
         ['${data.newConnections}', 'New connections (${data.days}d)', Icons.hub_outlined],
         ['${data.reactions + data.comments}', 'Reactions & comments', Icons.favorite_border],
-        [completeness == null ? '—' : '${completeness.round()}%', 'Profile completeness', Icons.trending_up],
+        [employability == null ? '—' : '${employability.score}', 'Employability score', Icons.workspace_premium_outlined],
       ]),
       SizedBox(height: AppSpace.base),
+      // Profile completeness (the RPC's number) still appears in the
+      // programme-comparison card below; the tile shows the broader score.
+      if (employability != null) ...[
+        RoundedCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.workspace_premium_outlined, color: AppColors.secondary),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(child: Text('Employability score', style: AppText.labelLg())),
+                  Text('${employability.score} / 100', style: AppText.labelLg()),
+                ],
+              ),
+              SizedBox(height: AppSpace.sm),
+              LinearProgressIndicator(
+                value: employability.score / 100,
+                color: AppColors.primary,
+                backgroundColor: AppColors.surfaceContainerHigh,
+              ),
+              SizedBox(height: AppSpace.sm),
+              Text(employability.hint, style: muted),
+            ],
+          ),
+        ),
+        SizedBox(height: AppSpace.sm),
+      ],
       RoundedCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
