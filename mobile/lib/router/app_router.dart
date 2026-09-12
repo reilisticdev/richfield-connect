@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
+import '../services/email_confirmation.dart';
 // main.dart imports this file for buildAppRouter(), and this file imports
 // main.dart back for the real screen widgets (LoginScreen, RegisterScreen,
 // RootShell, RichfieldRole) — a legal, ordinary circular import in Dart.
@@ -266,6 +267,15 @@ class AccountStatusScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (status == 'pending') {
+      // A brand-new alumni/business account arriving straight from the
+      // confirmation code or link: say the email part worked before
+      // explaining the wait. One-shot; a no-op on every later build.
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => EmailConfirmation.showWelcomeIfDue(context, awaitingApproval: true),
+      );
+    }
+
     final waiting = status == 'pending';
     return Scaffold(
       backgroundColor: AppColors.surfaceContainerLow,

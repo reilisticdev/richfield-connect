@@ -35,6 +35,23 @@ class AuthErrorMapper {
       return 'This account has been suspended by a Richfield administrator.';
     }
 
+    // Signed up, never confirmed. The login screen adds a "Resend
+    // confirmation email" action next to this one.
+    if (e.message.toLowerCase().contains('not confirmed')) {
+      return 'Confirm your email first: use the 6-digit code or the link we emailed you when you registered.';
+    }
+
+    // verifyOTP with a wrong, reused or stale 6-digit code.
+    final lower = e.message.toLowerCase();
+    if (lower.contains('token has expired') || lower.contains('otp_expired') ||
+        (lower.contains('invalid') && lower.contains('token'))) {
+      return 'That code isn\'t right or has expired. Check the latest email, or request a new one.';
+    }
+
+    if (lower.contains('rate limit') || lower.contains('for security purposes')) {
+      return 'Too many emails requested. Wait a minute, then try again.';
+    }
+
     return e.message;
   }
 

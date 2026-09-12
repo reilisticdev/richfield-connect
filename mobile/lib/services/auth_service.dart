@@ -7,6 +7,8 @@
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/supabase_config.dart';
+
 import 'profile_service.dart';
 
 /// Allowed self-registration roles. 'administrator' is intentionally
@@ -70,6 +72,9 @@ class AuthService {
     return _client.auth.signUp(
       email: email,
       password: password,
+      // The confirmation link lands on the email-confirmed function (phones
+      // are sent on into the app) instead of the default localhost Site URL.
+      emailRedirectTo: SupabaseConfig.emailConfirmedUrl,
       data: {
         // Programme, campus, years, student number or company details from
         // the register form. With email confirmation on there is no session
@@ -81,6 +86,27 @@ class AuthService {
         'first_name': firstName,
         'last_name': lastName,
       },
+    );
+  }
+
+  /// The 6-digit code from the confirmation email ({{ .Token }} in the
+  /// "Confirm signup" template). On success the account is confirmed AND
+  /// signed in — no browser, no link, whichever device read the email.
+  Future<AuthResponse> verifySignupCode({required String email, required String code}) {
+    return _client.auth.verifyOTP(
+      type: OtpType.signup,
+      email: email.trim(),
+      token: code.trim(),
+    );
+  }
+
+  /// A fresh confirmation email (new code + new link). GoTrue rate-limits
+  /// this per address; the error message says so if it's too soon.
+  Future<void> resendSignupEmail(String email) {
+    return _client.auth.resend(
+      type: OtpType.signup,
+      email: email.trim(),
+      emailRedirectTo: SupabaseConfig.emailConfirmedUrl,
     );
   }
 

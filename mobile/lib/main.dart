@@ -58,6 +58,7 @@ import 'services/push_notification_service.dart';
 import 'config/ai_config.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/cv_import_screen.dart';
+import 'services/email_confirmation.dart';
 import 'widgets/post_video_player.dart';
 import 'screens/career_pathways_screen.dart';
 import 'screens/events_screen.dart';
@@ -98,6 +99,10 @@ void main() async {
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
   );
+  // Notice richfield://auth/confirmed (supabase_flutter does the actual
+  // code-for-session exchange) so the shell can say "your email is
+  // confirmed" once. Not awaited: nothing here depends on it.
+  unawaited(EmailConfirmation.listenForDeepLink());
   final authService = AuthService(Supabase.instance.client);
 
   // Writes the device's FCM token onto whichever profile is signed in.
@@ -1050,6 +1055,11 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscure = true;
   bool _submitting = false;
   String? _errorMessage;
+
+  /// Set when sign-in failed because the address was never confirmed, so
+  /// the screen can offer "Resend confirmation email" for that address.
+  String? _unconfirmedEmail;
+  bool _resending = false;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
@@ -1057,6 +1067,24 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _errorMessage = widget.notice;
+  }
+
+  Future<void> _resendConfirmation() async {
+    final email = _unconfirmedEmail;
+    if (email == null) return;
+    setState(() => _resending = true);
+    try {
+      await widget.authService.resendSignupEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent a new confirmation email to $email.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
   }
 
   @override
@@ -1074,6 +1102,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _submitting = true;
       _errorMessage = null;
+      _unconfirmedEmail = null;
     });
     try {
       await widget.authService.signIn(
@@ -1081,7 +1110,12 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
     } catch (e) {
-      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+      setState(() {
+        _errorMessage = AuthErrorMapper.fromAny(e);
+        if (e is AuthException && e.message.toLowerCase().contains('not confirmed')) {
+          _unconfirmedEmail = _emailController.text.trim();
+        }
+      });
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -1277,6 +1311,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
                 ),
               ],
+              if (_unconfirmedEmail != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _resending ? null : _resendConfirmation,
+                    icon: Icon(Icons.forward_to_inbox_outlined, size: 18),
+                    label: Text(_resending ? 'Sending…' : 'Resend confirmation email'),
+                  ),
+                ),
               SizedBox(height: AppSpace.sm),
               PrimaryButton(
                 // The account-type tiles only change the hints; the account's
@@ -1403,7 +1446,54 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   static final _fourDigits = RegExp(r'^\d{4}$');
 
+  /// "Check your inbox" step: the 6-digit code from the confirmation email.
+  final _codeController = TextEditingController();
+  bool _verifyingCode = false;
+  bool _resendingCode = false;
+  String? _codeError;
+
+  Future<void> _verifyCode(String email) async {
+    final code = _codeController.text.trim();
+    if (code.length != 6) {
+      setState(() => _codeError = 'Enter the 6-digit code from the email.');
+      return;
+    }
+    setState(() {
+      _verifyingCode = true;
+      _codeError = null;
+    });
+    try {
+      await widget.authService.verifySignupCode(email: email, code: code);
+      // Confirmed and signed in. go_router's redirect now routes by
+      // account status: home for students, the pending-approval screen for
+      // alumni and business accounts. Either shows the welcome once.
+      EmailConfirmation.justConfirmed.value = true;
+      if (mounted) context.go('/home');
+    } catch (e) {
+      if (mounted) setState(() => _codeError = AuthErrorMapper.fromAny(e));
+    } finally {
+      if (mounted) setState(() => _verifyingCode = false);
+    }
+  }
+
+  Future<void> _resendCode(String email) async {
+    setState(() => _resendingCode = true);
+    try {
+      await widget.authService.resendSignupEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent a new email to $email.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _resendingCode = false);
+    }
+  }
+
   List<TextEditingController> get _controllers => [
+        _codeController,
         _fullNameController,
         _emailController,
         _passwordController,
@@ -1578,11 +1668,46 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Text('Check your inbox', textAlign: TextAlign.center, style: AppText.headlineLg()),
         SizedBox(height: AppSpace.sm),
         Text(
-          'We sent a confirmation link to $email. Open it, then come back and sign in.',
+          'We emailed a 6-digit code to $email. Enter it here, or tap the link in the email on this phone.',
           textAlign: TextAlign.center,
           style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
         ),
+        SizedBox(height: AppSpace.lg),
+        TextField(
+          controller: _codeController,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          maxLength: 6,
+          autofillHints: const [AutofillHints.oneTimeCode],
+          style: AppText.headlineLg(),
+          decoration: InputDecoration(
+            counterText: '',
+            hintText: '••••••',
+            filled: true,
+            fillColor: AppColors.surfaceContainerLowest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          onSubmitted: (_) => _verifyCode(email),
+        ),
+        if (_codeError != null) ...[
+          SizedBox(height: AppSpace.sm),
+          Text(_codeError!, textAlign: TextAlign.center, style: AppText.bodySm(color: AppColors.error)),
+        ],
+        SizedBox(height: AppSpace.md),
+        PrimaryButton(
+          label: _verifyingCode ? 'Checking…' : 'Confirm my email',
+          icon: Icons.verified_outlined,
+          onPressed: _verifyingCode ? null : () => _verifyCode(email),
+        ),
+        TextButton(
+          onPressed: _resendingCode ? null : () => _resendCode(email),
+          child: Text(_resendingCode ? 'Sending…' : 'Resend the email'),
+        ),
         if (_tab != 0) ...[
+          SizedBox(height: AppSpace.sm),
           SizedBox(height: AppSpace.md),
           RoundedCard(
             child: Text(
@@ -1594,9 +1719,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ],
         SizedBox(height: AppSpace.lg),
-        PrimaryButton(
-          label: 'Back to sign in',
-          icon: Icons.login,
+        TextButton.icon(
+          icon: Icon(Icons.login, size: 18),
+          label: Text('I\'ll sign in later'),
           onPressed: () => context.go('/login'),
         ),
       ],
@@ -2620,7 +2745,12 @@ class _RootShellState extends State<RootShell> {
     // widget's first frame has actually built is exactly the kind of
     // "Navigator operation requested with a context that does not
     // include a Navigator" crash this avoids.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTour());
+    // Welcome ("your email is confirmed") first when one is due, then the
+    // first-run tour — two dialogs at once would fight for the screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await EmailConfirmation.showWelcomeIfDue(context, awaitingApproval: false);
+      if (mounted) _maybeShowTour();
+    });
   }
 
   @override
