@@ -85,6 +85,20 @@ class FeedService {
   /// The set of post ids the signed-in user has reposted, so the feed can
   /// render the Repost button in its correct on/off state on first paint
   /// instead of assuming "not reposted" and flickering after the fact.
+  /// Ids of the members this user is connected to (accepted, either
+  /// direction). Feeds FeedRanker's "from your connections" boost.
+  Future<Set<String>> fetchConnectedMemberIds(String userId) async {
+    final rows = await _client
+        .from('connections')
+        .select('requester_id, addressee_id')
+        .eq('status', 'accepted')
+        .or('requester_id.eq.$userId,addressee_id.eq.$userId');
+    return {
+      for (final row in rows as List)
+        (row['requester_id'] == userId ? row['addressee_id'] : row['requester_id']) as String,
+    };
+  }
+
   Future<Set<String>> fetchMyRepostedPostIds(String userId) async {
     final rows = await _client
         .from('post_reposts')

@@ -48,6 +48,7 @@ import 'services/media_service.dart';
 import 'services/profile_service.dart';
 import 'services/business_analytics_service.dart';
 import 'services/feed_service.dart';
+import 'services/feed_ranker.dart';
 // app_router.dart imports this file back for the real screen widgets
 // (LoginScreen, RegisterScreen, RootShell) — a legal, ordinary circular
 // import in Dart, not a mistake.
@@ -458,7 +459,12 @@ class FeedPost {
 
   final FeedPostType type;
   final String authorName;
+
+  /// Capitalised for display ("Student"); [authorRoleKey] is the raw
+  /// profiles.role value the ranker keys on.
   final String authorRole;
+  final String authorRoleKey;
+  final DateTime createdAt;
   final bool verified;
   final String timeAgo;
   final String body;
@@ -481,6 +487,8 @@ class FeedPost {
     required this.type,
     required this.authorName,
     required this.authorRole,
+    this.authorRoleKey = '',
+    DateTime? createdAt,
     required this.verified,
     required this.timeAgo,
     required this.body,
@@ -488,7 +496,7 @@ class FeedPost {
     required this.reactionCountA,
     required this.reactionCountB,
     required this.reactionCountC,
-  });
+  }) : createdAt = createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Cheap immutable update so the feed can flip one card's like, comment or
   /// repost state without re-querying the whole list.
@@ -510,6 +518,8 @@ class FeedPost {
       type: type,
       authorName: authorName,
       authorRole: authorRole,
+      authorRoleKey: authorRoleKey,
+      createdAt: createdAt,
       verified: verified,
       timeAgo: timeAgo,
       body: body,
@@ -554,6 +564,8 @@ FeedPost _feedPostFromRow(
     type: row['video_path'] != null ? FeedPostType.video : FeedPostType.text,
     authorName: name.isEmpty ? 'Richfield Member' : name,
     authorRole: role == null || role.isEmpty ? '' : role[0].toUpperCase() + role.substring(1),
+    authorRoleKey: role ?? '',
+    createdAt: createdAt,
     verified: true,
     timeAgo: _timeAgo(createdAt),
     body: row['body'] as String? ?? '',
@@ -2778,7 +2790,15 @@ class _FeedScreenState extends State<FeedScreen> {
 
   /// Applied to the loaded posts by _visiblePosts. None of the chips used to
   /// filter anything, and the third was 'Graduate Jobs' in a list of posts.
-  static const _filters = ['All updates', 'Career reels', 'Photos'];
+  /// 'Newest first' switches the role ranking off (plain chronological).
+  static const _filters = ['For you', 'Career reels', 'Photos', 'Newest first'];
+  static const _newestFilter = 3;
+
+  /// profiles.role of the signed-in member; drives FeedRanker.
+  String _viewerRole = '';
+
+  /// The same posts in plain created_at order, for the 'Newest first' chip.
+  List<FeedPost> _postsNewest = [];
 
   /// Upcoming published events, soonest first. The banner shows the first
   /// and links to the rest; an empty list hides it.
@@ -2832,6 +2852,8 @@ class _FeedScreenState extends State<FeedScreen> {
         _feedService.fetchRecentPosts(),
         if (userId != null) _feedService.fetchMyRepostedPostIds(userId),
         if (userId != null) _feedService.fetchMyReactedPostIds(userId),
+        if (userId != null) _feedService.fetchConnectedMemberIds(userId),
+        if (userId != null) _authService.fetchOwnProfile(),
       ]);
 
       final rows = results[0] as List<Map<String, dynamic>>;
@@ -2839,19 +2861,61 @@ class _FeedScreenState extends State<FeedScreen> {
           results.length > 1 ? results[1] as Set<String> : <String>{};
       final reacted =
           results.length > 2 ? results[2] as Set<String> : <String>{};
+      final connections =
+          results.length > 3 ? results[3] as Set<String> : <String>{};
+      final viewerRole = results.length > 4
+          ? ((results[4] as Map<String, dynamic>)['role'] as String? ?? '')
+          : '';
+
+      final newest = rows
+          .map((row) => _feedPostFromRow(
+                row,
+                repostedIds: reposted,
+                reactedIds: reacted,
+                mediaService: _mediaService,
+              ))
+          .toList();
+
+      // Guidelines 2.4: ranked by relevance to the viewer's role and
+      // engagement history, so the same posts read differently to a
+      // student, an alumnus and a recruiter. See services/feed_ranker.dart.
+      final engagedAuthors = <String>{
+        for (final p in newest)
+          if (p.id != null && p.authorId != null && (reacted.contains(p.id) || reposted.contains(p.id)))
+            p.authorId!,
+      };
+      final rankedIds = FeedRanker.rankIds(
+        [
+          for (final p in newest)
+            if (p.id != null)
+              RankableFeedPost(
+                id: p.id!,
+                authorId: p.authorId,
+                authorRole: p.authorRoleKey,
+                createdAt: p.createdAt,
+                isVideo: p.type == FeedPostType.video,
+                hasImage: p.imageUrl != null,
+                reactions: p.reactionCountA,
+                comments: p.reactionCountB,
+                reposts: p.reactionCountC,
+                viewerReacted: p.isReacted,
+                viewerReposted: p.isReposted,
+              ),
+        ],
+        viewerRole: viewerRole,
+        connectionIds: connections,
+        engagedAuthorIds: engagedAuthors,
+      );
+      final byId = {for (final p in newest) if (p.id != null) p.id!: p};
+      final ranked = [for (final id in rankedIds) byId[id]!];
 
       if (!mounted) return;
       setState(() {
         _repostedIds = reposted;
         _reactedIds = reacted;
-        _posts = rows
-            .map((row) => _feedPostFromRow(
-                  row,
-                  repostedIds: reposted,
-                  reactedIds: reacted,
-                  mediaService: _mediaService,
-                ))
-            .toList();
+        _viewerRole = viewerRole;
+        _postsNewest = newest;
+        _posts = ranked;
         _loadingPosts = false;
       });
     } catch (e) {
@@ -3004,6 +3068,14 @@ class _FeedScreenState extends State<FeedScreen> {
               padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
               child: SectionHeader(title: 'Network Activity', trailing: null),
             ),
+            if (!_loadingPosts && _viewerRole.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+                child: Text(
+                  _filter == _newestFilter ? 'Newest first.' : FeedRanker.explain(_viewerRole),
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
+              ),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
               child: SizedBox(
@@ -3113,7 +3185,8 @@ class _FeedScreenState extends State<FeedScreen> {
     setState(() => _dismissedPosts.add(post.authorName));
   }
 
-  List<FeedPost> get _visiblePosts => _posts.where((post) {
+  List<FeedPost> get _visiblePosts =>
+      (_filter == _newestFilter ? _postsNewest : _posts).where((post) {
         if (_dismissedPosts.contains(post.authorName)) return false;
         return switch (_filter) {
           1 => post.type == FeedPostType.video,
