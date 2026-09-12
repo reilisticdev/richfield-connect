@@ -5815,6 +5815,19 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         },
       ),
       _entrySection(
+        section: PortfolioSection.achievements,
+        title: 'Achievements',
+        rows: p.achievements,
+        empty: "Awards, dean's list, competition placings, scholarships and hackathon wins.",
+        card: (row, onRemove) => _entryCard(
+          icon: Icons.emoji_events_outlined,
+          title: row['title'] as String? ?? '',
+          subtitle: monthYearLabel(row['date_earned']),
+          body: row['description'] as String?,
+          onRemove: onRemove,
+        ),
+      ),
+      _entrySection(
         section: PortfolioSection.leadership,
         title: 'Leadership',
         rows: p.leadership,

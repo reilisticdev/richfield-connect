@@ -3,9 +3,9 @@
 // One bottom-sheet form for every section a member writes on their own
 // portfolio. The fields marked required are exactly the tables' NOT NULL
 // columns — education needs programme, campus and start year;
-// work_experience and leadership_roles need an organisation; projects and
-// certifications only a title — so a save can't fail on a constraint the
-// form never mentioned.
+// work_experience and leadership_roles need an organisation; projects,
+// certifications, badges and achievements only a title — so a save can't
+// fail on a constraint the form never mentioned.
 
 import 'package:flutter/material.dart';
 
@@ -33,6 +33,7 @@ const _titles = {
   PortfolioSection.projects: 'Add a project',
   PortfolioSection.certifications: 'Add a certification',
   PortfolioSection.badges: 'Add a badge',
+  PortfolioSection.achievements: 'Add an achievement',
   PortfolioSection.leadership: 'Add a leadership role',
 };
 
@@ -68,6 +69,11 @@ const _fields = <PortfolioSection, List<_Field>>{
     _Field('issuer', 'Issued by', hint: 'e.g. Credly, Microsoft Learn, Google'),
     _Field('credential_url', 'Badge link', kind: _Kind.url, hint: 'credly.com/badges/…'),
     _Field('date_earned', 'Date earned', kind: _Kind.date),
+  ],
+  PortfolioSection.achievements: [
+    _Field('title', 'Achievement', required: true, hint: "e.g. Dean's list 2025, Hackathon winner"),
+    _Field('description', 'What it was for', kind: _Kind.multiline),
+    _Field('date_earned', 'Date received', kind: _Kind.date),
   ],
   PortfolioSection.leadership: [
     _Field('role_title', 'Role', required: true, hint: 'e.g. Class representative'),

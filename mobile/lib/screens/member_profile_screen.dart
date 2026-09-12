@@ -57,6 +57,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
   List<Map<String, dynamic>> _projects = [];
   List<Map<String, dynamic>> _certifications = [];
   List<Map<String, dynamic>> _badges = [];
+  List<Map<String, dynamic>> _achievements = [];
   List<Map<String, dynamic>> _recommendations = [];
   Map<String, dynamic>? _company;
   String _myRole = '';
@@ -111,6 +112,11 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
             .select('title, issuer, credential_url, date_earned')
             .eq('profile_id', id),
         _client
+            .from('achievements')
+            .select('title, description, date_earned')
+            .eq('profile_id', id)
+            .order('date_earned', ascending: false),
+        _client
             .from('recommendations')
             .select('id, body, created_at, author_id, '
                 'author:profiles!recommendations_author_id_fkey(first_name, last_name, role, '
@@ -137,10 +143,11 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
         _projects = rows(5);
         _certifications = rows(6);
         _badges = rows(7);
-        _recommendations = rows(8);
-        _company = results[9] as Map<String, dynamic>?;
-        _myRole = (results[10] as Map<String, dynamic>)['role'] as String? ?? '';
-        _network = results[11] as NetworkSnapshot;
+        _achievements = rows(8);
+        _recommendations = rows(9);
+        _company = results[10] as Map<String, dynamic>?;
+        _myRole = (results[11] as Map<String, dynamic>)['role'] as String? ?? '';
+        _network = results[12] as NetworkSnapshot;
         _loading = false;
       });
 
@@ -285,6 +292,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
               _certificationsSection(),
             ],
             if (_badges.isNotEmpty) ...[const SizedBox(height: AppSpace.lg), _badgesSection()],
+            if (_achievements.isNotEmpty) ...[const SizedBox(height: AppSpace.lg), _achievementsSection()],
             if (_education.isNotEmpty) ...[const SizedBox(height: AppSpace.lg), _educationSection()],
             const SizedBox(height: AppSpace.lg),
             _recommendationsSection(person),
@@ -702,6 +710,24 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
   }
 
   bool _isCredly(String url) => url.toLowerCase().contains('credly.com');
+
+  /// Only rows the owner's 'achievements' visibility setting lets this
+  /// viewer see come back (RLS), so an empty list simply hides the section.
+  Widget _achievementsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title: 'Achievements'),
+        for (final a in _achievements)
+          _entryCard(
+            icon: Icons.emoji_events_outlined,
+            title: a['title'] as String? ?? '',
+            subtitle: monthYearLabel(a['date_earned']),
+            body: a['description'] as String?,
+          ),
+      ],
+    );
+  }
 
   Widget _educationSection() {
     return Column(
