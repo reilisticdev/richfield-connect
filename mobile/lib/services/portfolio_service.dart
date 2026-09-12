@@ -2,7 +2,7 @@
 //
 // The signed-in user's own portfolio for the Portfolio tab: the sections
 // they write themselves (education, experience, projects, certifications,
-// leadership roles), what other members have given them (skill endorsements,
+// badges, achievements, leadership roles), what other members have given them (skill endorsements,
 // written recommendations) and their connection count — one parallel round
 // trip.
 //
@@ -18,7 +18,7 @@
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-enum PortfolioSection { education, experience, projects, certifications, badges, leadership }
+enum PortfolioSection { education, experience, projects, certifications, badges, achievements, leadership }
 
 extension PortfolioSectionTable on PortfolioSection {
   String get table => switch (this) {
@@ -27,6 +27,7 @@ extension PortfolioSectionTable on PortfolioSection {
         PortfolioSection.projects => 'projects',
         PortfolioSection.certifications => 'certifications',
         PortfolioSection.badges => 'badges',
+        PortfolioSection.achievements => 'achievements',
         PortfolioSection.leadership => 'leadership_roles',
       };
 }
@@ -40,6 +41,7 @@ class PortfolioData {
     this.projects = const [],
     this.certifications = const [],
     this.badges = const [],
+    this.achievements = const [],
     this.leadership = const [],
     this.recommendations = const [],
     this.connectionCount = 0,
@@ -57,6 +59,11 @@ class PortfolioData {
   /// Digital badges (Credly, Microsoft Learn, Google, AWS…): {id, title,
   /// issuer, credential_url, date_earned}. Same table shape as certifications.
   final List<Map<String, dynamic>> badges;
+
+  /// Awards, dean's list, competition placings, scholarships (guidelines 2.3
+  /// "achievements"): {id, title, description, date_earned}. Table from
+  /// migration 010; the section had no UI until 2026-09-12.
+  final List<Map<String, dynamic>> achievements;
   final List<Map<String, dynamic>> leadership;
 
   /// Recommendations received, each with an embedded `author` profile.
@@ -100,6 +107,11 @@ class PortfolioService {
           .eq('profile_id', userId)
           .order('date_earned', ascending: false),
       _client
+          .from('achievements')
+          .select('id, title, description, date_earned')
+          .eq('profile_id', userId)
+          .order('date_earned', ascending: false),
+      _client
           .from('leadership_roles')
           .select('id, role_title, organisation, description')
           .eq('profile_id', userId),
@@ -128,9 +140,10 @@ class PortfolioService {
       projects: rows(4),
       certifications: rows(5),
       badges: rows(6),
-      leadership: rows(7),
-      recommendations: rows(8),
-      connectionCount: rows(9).length,
+      achievements: rows(7),
+      leadership: rows(8),
+      recommendations: rows(9),
+      connectionCount: rows(10).length,
     );
   }
 
