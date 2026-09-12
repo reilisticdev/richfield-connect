@@ -23,8 +23,22 @@ class ProfileService {
 
   final SupabaseClient _client;
 
+  /// Every `profiles` column a signed-in member may read. Listed explicitly
+  /// because a bare `.select()` is `select *`, and since migration 037 the
+  /// API refuses `*` on this table: `email` and `fcm_token` are no longer
+  /// readable by members (they were leaking to anyone signed in). A member's
+  /// own email comes from `auth.currentUser.email`; nothing here needs it.
+  static const columns =
+      'id, role, first_name, last_name, account_status, professional_headline, '
+      'career_interests, bio, avatar_path, github_url, linkedin_url, '
+      'website_url, created_at, last_active_at';
+
   Future<Map<String, dynamic>> fetchProfile(String userId) async {
-    return await _client.from('profiles').select().eq('id', userId).single();
+    return await _client
+        .from('profiles')
+        .select(columns)
+        .eq('id', userId)
+        .single();
   }
 
   /// Patch-style update: only non-null arguments are written, so a screen
@@ -75,7 +89,7 @@ class ProfileService {
         .from('profiles')
         .update(patch)
         .eq('id', userId)
-        .select()
+        .select(columns)
         .single();
   }
 

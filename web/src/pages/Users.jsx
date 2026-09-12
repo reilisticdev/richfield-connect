@@ -28,8 +28,11 @@ function Users() {
     let cancelled = false;
 
     const load = async () => {
+      // admin_profiles (migration 037) is the administrator read path that
+      // still includes email; the profiles table no longer serves it to the
+      // API for any role. Same rows, same columns, admin-only by definition.
       const { data, error } = await supabase
-        .from("profiles")
+        .from("admin_profiles")
         .select("id, first_name, last_name, email, role, account_status, created_at")
         .order("created_at", { ascending: false });
 
