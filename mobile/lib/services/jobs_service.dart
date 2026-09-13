@@ -20,12 +20,29 @@ class JobsService {
   Future<List<Map<String, dynamic>>> fetchApprovedOpportunities() async {
     final rows = await _client
         .from('opportunities')
-        .select('id, title, description, opportunity_type, required_skills, '
+        .select('id, business_id, title, description, opportunity_type, required_skills, '
             'programme_filter, status, created_at, '
             'profiles(business_profiles(company_name, location))')
         .eq('status', 'approved')
         .order('created_at', ascending: false);
     return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Deletes an opportunity listing. RLS ("Business manages own
+  /// opportunities", "Administrators manage all opportunities") limits this
+  /// to the posting business or an administrator; applications for it go
+  /// with it through ON DELETE CASCADE. Zero rows back means RLS refused -
+  /// see FeedService.deletePost() for why that's checked explicitly rather
+  /// than trusting the call not to throw.
+  Future<void> deleteOpportunity(String opportunityId) async {
+    final rows = await _client
+        .from('opportunities')
+        .delete()
+        .eq('id', opportunityId)
+        .select('id');
+    if (List<Map<String, dynamic>>.from(rows as List).isEmpty) {
+      throw const PostgrestException(message: 'That listing could not be deleted.');
+    }
   }
 
   /// recommend_opportunities() (migration 026) scores approved listings

@@ -4504,6 +4504,11 @@ class _JobsScreenState extends State<JobsScreen> {
 
   bool get _hasCareerProfile => _role == 'student' || _role == 'alumni';
 
+  /// Administrators can remove any listing here too - "Administrators
+  /// manage all opportunities" RLS already allows it, same shape as the
+  /// Feed's admin post-delete.
+  bool get _isAdmin => _role == 'administrator';
+
   @override
   void initState() {
     super.initState();
@@ -4693,6 +4698,45 @@ class _JobsScreenState extends State<JobsScreen> {
     );
   }
 
+  Future<void> _deleteOpportunity(Map<String, dynamic> job) async {
+    final id = job['id'] as String?;
+    if (id == null) return;
+    final title = job['title'] as String? ?? 'this listing';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete "$title"?'),
+        content: Text(
+          'It will be removed from Opportunities immediately, along with any applications to it. This can\'t be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _jobsService.deleteOpportunity(id);
+      if (!mounted) return;
+      setState(() {
+        _all = _all.where((o) => o['id'] != id).toList();
+        _matches.remove(id);
+        _recommendedIds = _recommendedIds.where((r) => r != id).toList();
+      });
+      messenger.showSnackBar(SnackBar(content: Text('Listing deleted.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
@@ -4809,6 +4853,8 @@ class _JobsScreenState extends State<JobsScreen> {
     final company = business?['company_name'] as String? ?? 'Unknown company';
     final location = business?['location'] as String? ?? '';
     final skills = (job['required_skills'] as List?)?.cast<String>() ?? [];
+    final isOwner = job['business_id'] != null && job['business_id'] == _authService.currentUser?.id;
+    final canDelete = isOwner || _isAdmin;
     final match = _matches[job['id']];
     final matchedSkills = {
       for (final s in (match?['matched_skills'] as List?)?.cast<String>() ?? const <String>[])
@@ -4853,6 +4899,18 @@ class _JobsScreenState extends State<JobsScreen> {
                   background: AppColors.tertiaryContainer.withOpacity(0.3),
                   foreground: AppColors.tertiary,
                 ),
+                if (canDelete)
+                  PopupMenuButton<String>(
+                    tooltip: 'More',
+                    icon: Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
+                    onSelected: (_) => _deleteOpportunity(job),
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete listing', style: TextStyle(color: AppColors.error)),
+                      ),
+                    ],
+                  ),
               ],
             ),
             if (match != null) ...[
