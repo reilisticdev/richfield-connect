@@ -1512,7 +1512,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   static final _fourDigits = RegExp(r'^\d{4}$');
 
-  /// "Check your inbox" step: the 6-digit code from the confirmation email.
+  /// "Check your inbox" step: the 8-digit code from the confirmation email.
   final _codeController = TextEditingController();
   bool _verifyingCode = false;
   bool _resendingCode = false;
@@ -1520,8 +1520,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _verifyCode(String email) async {
     final code = _codeController.text.trim();
-    if (code.length != 6) {
-      setState(() => _codeError = 'Enter the 6-digit code from the email.');
+    if (code.length != 8) {
+      setState(() => _codeError = 'Enter the 8-digit code from the email.');
       return;
     }
     setState(() {
@@ -1734,7 +1734,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Text('Check your inbox', textAlign: TextAlign.center, style: AppText.headlineLg()),
         SizedBox(height: AppSpace.sm),
         Text(
-          'We emailed a 6-digit code to $email. Enter it here, or tap the link in the email on this phone.',
+          'We emailed an 8-digit code to $email. Enter it here, or tap the link in the email on this phone.',
           textAlign: TextAlign.center,
           style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
         ),
@@ -1743,12 +1743,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
           controller: _codeController,
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
-          maxLength: 6,
+          maxLength: 8,
           autofillHints: const [AutofillHints.oneTimeCode],
           style: AppText.headlineLg(),
           decoration: InputDecoration(
             counterText: '',
-            hintText: '••••••',
+            hintText: '••••••••',
             filled: true,
             fillColor: AppColors.surfaceContainerLowest,
             border: OutlineInputBorder(

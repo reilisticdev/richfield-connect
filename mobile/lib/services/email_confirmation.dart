@@ -4,7 +4,7 @@
 // browser tab sitting on http://localhost:3000 (Keshav's QA, 2026-09-12).
 //
 // Two ways in, both ending in a signed-in session and a one-time welcome:
-//   1. The 6-digit code in the confirmation email, typed on the "Check your
+//   1. The 8-digit code in the confirmation email, typed on the "Check your
 //      inbox" screen (AuthService.verifySignupCode). Works whichever device
 //      the email is read on; no browser involved.
 //   2. The link in the email, tapped on the phone. GoTrue verifies it and

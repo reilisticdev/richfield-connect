@@ -46,7 +46,7 @@ void main() {
 
     test('unconfirmed account signing in', () {
       final e = AuthException('Email not confirmed');
-      expect(AuthErrorMapper.fromAuthException(e), contains('6-digit code'));
+      expect(AuthErrorMapper.fromAuthException(e), contains('8-digit code'));
     });
 
     test('an unrecognised message still falls through unchanged', () {

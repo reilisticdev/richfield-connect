@@ -100,7 +100,7 @@ class AuthService {
     );
   }
 
-  /// The 6-digit code from the confirmation email ({{ .Token }} in the
+  /// The 8-digit code from the confirmation email ({{ .Token }} in the
   /// "Confirm signup" template). On success the account is confirmed AND
   /// signed in — no browser, no link, whichever device read the email.
   Future<AuthResponse> verifySignupCode({required String email, required String code}) {
@@ -154,7 +154,7 @@ class AuthService {
     );
   }
 
-  /// The 6-digit code from the password-reset email ({{ .Token }} in the
+  /// The 8-digit code from the password-reset email ({{ .Token }} in the
   /// "Reset password" template). Signs the member in so [updatePassword]
   /// can run — no browser, whichever device read the email.
   Future<AuthResponse> verifyRecoveryCode({required String email, required String code}) async {

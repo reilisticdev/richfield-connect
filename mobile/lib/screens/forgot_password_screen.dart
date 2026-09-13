@@ -37,7 +37,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _sent = false;
   String? _error;
 
-  // "Check your inbox" step: the 6-digit code from the reset email plus the
+  // "Check your inbox" step: the 8-digit code from the reset email plus the
   // new password, so recovery finishes in the app on any device.
   final _codeController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -56,8 +56,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Future<void> _resetWithCode() async {
     final code = _codeController.text.trim();
     final password = _passwordController.text;
-    if (code.length != 6) {
-      setState(() => _resetError = 'Enter the 6-digit code from the email.');
+    if (code.length != 8) {
+      setState(() => _resetError = 'Enter the 8-digit code from the email.');
       return;
     }
     if (password.length < 8) {
@@ -216,7 +216,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       Text('Check your inbox', style: AppText.headlineLg(), textAlign: TextAlign.center),
       SizedBox(height: AppSpace.xs),
       Text(
-        'If an account exists for ${_emailController.text.trim()}, an email with a 6-digit code '
+        'If an account exists for ${_emailController.text.trim()}, an email with an 8-digit code '
         'and a reset link is on its way. Enter the code here with your new password, or tap '
         'the link on this phone. It expires in 60 minutes.',
         style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
@@ -227,12 +227,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         controller: _codeController,
         keyboardType: TextInputType.number,
         textAlign: TextAlign.center,
-        maxLength: 6,
+        maxLength: 8,
         autofillHints: const [AutofillHints.oneTimeCode],
         style: AppText.headlineLg(),
         decoration: InputDecoration(
           counterText: '',
-          hintText: '••••••',
+          hintText: '••••••••',
           filled: true,
           fillColor: AppColors.surfaceContainerLowest,
           border: OutlineInputBorder(
