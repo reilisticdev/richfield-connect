@@ -38,10 +38,10 @@ class AuthErrorMapper {
     // Signed up, never confirmed. The login screen adds a "Resend
     // confirmation email" action next to this one.
     if (e.message.toLowerCase().contains('not confirmed')) {
-      return 'Confirm your email first: use the 6-digit code or the link we emailed you when you registered.';
+      return 'Confirm your email first: use the 8-digit code or the link we emailed you when you registered.';
     }
 
-    // verifyOTP with a wrong, reused or stale 6-digit code.
+    // verifyOTP with a wrong, reused or stale 8-digit code.
     final lower = e.message.toLowerCase();
     if (lower.contains('token has expired') || lower.contains('otp_expired') ||
         (lower.contains('invalid') && lower.contains('token'))) {

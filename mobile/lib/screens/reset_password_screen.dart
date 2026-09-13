@@ -5,7 +5,7 @@
 //     function sent them to richfield://auth/recovery?code=… -> supabase_flutter
 //     exchanged the code for a session -> AuthService.recoveryPending is set
 //     and the router parks them here until a new password is saved;
-//   * or they typed the 6-digit code on the Forgot-password screen, which
+//   * or they typed the 8-digit code on the Forgot-password screen, which
 //     does the same thing without a browser (ForgotPasswordScreen).
 // Either way there is already a signed-in session; this screen only calls
 // updateUser(password) and then lets the router carry on to Home.
