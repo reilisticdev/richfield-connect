@@ -27,6 +27,10 @@ function Sidebar() {
           Dashboard
         </NavLink>
 
+        <NavLink to="/users">
+          Users
+        </NavLink>
+
         <NavLink to="/analytics">
           Analytics
         </NavLink>
@@ -45,6 +49,10 @@ function Sidebar() {
 
         <NavLink to="/announcements">
           Announcements
+        </NavLink>
+
+        <NavLink to="/audit-log">
+          Audit Log
         </NavLink>
       </nav>
 

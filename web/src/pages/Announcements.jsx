@@ -19,23 +19,32 @@ function Announcements() {
   const sendAnnouncement = async (e) => {
     e.preventDefault();
 
-    if (!title || !message) {
+    const cleanTitle = title.trim();
+    const cleanMessage = message.trim();
+
+    setError(null);
+    setSuccessMessage(null);
+
+    // This used to return silently, so a blank form looked like a broken
+    // button.
+    if (!cleanTitle || !cleanMessage) {
+      setError("Add a title and a message before sending.");
       return;
     }
 
     setSending(true);
-    setError(null);
-    setSuccessMessage(null);
 
     const { data, error } = await supabase.rpc("broadcast_announcement", {
-      announcement_title: title,
-      announcement_message: message,
+      announcement_title: cleanTitle,
+      announcement_message: cleanMessage,
       target_role: audienceToRole[audience],
     });
 
     if (error) {
       console.error("Error sending announcement:", error);
-      setError("Could not send announcement.");
+      // The RPC raises readable reasons (not an administrator, blank
+      // message). A generic message is what hid migration 023's type bug.
+      setError(error.message || "Could not send announcement.");
       setSending(false);
       return;
     }

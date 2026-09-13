@@ -1,4 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only src/debug and src/profile declared INTERNET, which Flutter adds
+         for the dev tooling. The main manifest had none, so a *release* APK
+         shipped with no network permission at all: Supabase auth, the feed
+         query and every storage upload would fail on the judged build while
+         working perfectly in `flutter run`. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <application
         android:label="richfield"
         android:name="${applicationName}"
@@ -24,6 +32,32 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- richfield://auth/confirmed: where the email-confirmed edge
+                 function sends a phone after the "confirm your email" link.
+                 supabase_flutter (app_links) exchanges the PKCE code on it
+                 for a session; services/email_confirmation.dart shows the
+                 welcome. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="richfield" android:host="auth"/>
+            </intent-filter>
+            <!-- richfield://member/<uid>: QR Connect. The Portfolio shows this
+                 link as a QR code; the phone camera opens it here and
+                 services/member_link.dart hands the id to RootShell, which
+                 pushes that member's profile. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="richfield" android:host="member"/>
+            </intent-filter>
+            <!-- Keep Flutter's own deep-link routing off: with it on, GoRouter
+                 would receive richfield://auth/confirmed as a route and show
+                 "Page not found" while supabase_flutter was still signing
+                 the member in. app_links delivers the link regardless. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

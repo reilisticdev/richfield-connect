@@ -6,11 +6,13 @@ import RequireAdmin from "./components/RequireAdmin";
 
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Users from "./pages/Users";
 import Moderation from "./pages/Moderation";
 import Opportunities from "./pages/Opportunities";
 import Events from "./pages/Events";
 import Announcements from "./pages/Announcements";
 import Analytics from "./pages/Analytics";
+import AuditLog from "./pages/AuditLog";
 
 function AdminLayout({ children }) {
   return (
@@ -51,6 +53,15 @@ function App() {
           element={
             <ProtectedAdminPage>
               <Dashboard />
+            </ProtectedAdminPage>
+          }
+        />
+
+        <Route
+          path="/users"
+          element={
+            <ProtectedAdminPage>
+              <Users />
             </ProtectedAdminPage>
           }
         />
@@ -100,6 +111,15 @@ function App() {
           }
         />
 
+        <Route
+          path="/audit-log"
+          element={
+            <ProtectedAdminPage>
+              <AuditLog />
+            </ProtectedAdminPage>
+          }
+        />
+
         {/* Unknown routes return to login */}
         <Route
           path="*"
@@ -112,4 +132,3 @@ function App() {
 }
 
 export default App;
-

@@ -1,5 +1,5 @@
 ﻿// =====================================================================
-// RICHFIELD GRADUATE NETWORK â€” Flutter UI Prototype
+// RICHFIELD GRADUATE NETWORK — Flutter UI Prototype
 // -----------------------------------------------------------------------
 // Converted from the Google Stitch HTML/Tailwind export (DESIGN.md +
 // code.html) for the 2026 Richfield Hackathon brief.
@@ -10,48 +10,134 @@
 //     (../services/auth_service.dart) against a real Supabase project
 //     (see config/supabase_config.dart), and navigation runs through
 //     go_router (../router/app_router.dart) instead of manual Navigator
-//     calls â€” see _HomeGate in app_router.dart for how the post-login role
+//     calls — see _HomeGate in app_router.dart for how the post-login role
 //     (Feed vs BusinessHub vs AdminHub) gets resolved from `profiles`.
-//   - Everything else is still UI-layer prototype: the "MOCK DATA" section
-//     below (FeedScreen, Jobs/Network/Portfolio content, dashboards) is
-//     still sample data, not wired to real tables. That's the known,
-//     deliberate scope of this pass â€” swap it out next.
+//   - Every tab now reads real tables. The MockData class that used to feed
+//     the Feed, Jobs, Network and Portfolio content and the dashboards is
+//     gone; an empty section means the database has no rows for it yet.
 //   - Two screens (Jobs, Network) had no corresponding Stitch export, so
 //     they were built to match the existing design system rather than
-//     left blank â€” swap them for your real designs when ready.
+//     left blank — swap them for your real designs when ready.
 //
 // Performance note: built with A14-class phones (iPhone 12 family /
-// iPhone SE 3rd gen / iPad Air 4) in mind â€” no heavyweight image
+// iPhone SE 3rd gen / iPad Air 4) in mind — no heavyweight image
 // decoding, no unnecessary rebuilds, `const` constructors used wherever
 // the widget tree allows it.
 // =====================================================================
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
+
+import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'config/supabase_config.dart';
+import 'screens/edit_profile_screen.dart';
+import 'screens/forgot_password_screen.dart';
+import 'screens/privacy_settings_screen.dart';
 import 'services/auth_error_mapper.dart';
 import 'services/auth_service.dart';
 import 'services/jobs_service.dart';
+import 'services/media_service.dart';
+import 'services/profile_service.dart';
 import 'services/business_analytics_service.dart';
 import 'services/feed_service.dart';
+import 'services/feed_ranker.dart';
 // app_router.dart imports this file back for the real screen widgets
 // (LoginScreen, RegisterScreen, RootShell) — a legal, ordinary circular
 // import in Dart, not a mistake.
 import 'router/app_router.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'services/push_notification_service.dart';
+import 'config/ai_config.dart';
+import 'screens/ai_assistant_screen.dart';
+import 'screens/cv_import_screen.dart';
+import 'screens/member_profile_screen.dart';
+import 'services/email_confirmation.dart';
+import 'services/member_link.dart';
+import 'widgets/post_video_player.dart';
+import 'screens/career_pathways_screen.dart';
+import 'screens/events_screen.dart';
+import 'services/profile_context_service.dart';
+import 'screens/messages_screen.dart';
+import 'screens/network_screen.dart';
+import 'screens/notifications_screen.dart';
+import 'screens/comments_sheet.dart';
+import 'widgets/report_content_dialog.dart';
+import 'services/notifications_service.dart';
+import 'services/realtime_hub.dart';
+import 'services/portfolio_service.dart';
+import 'services/student_analytics_service.dart';
+import 'services/admin_analytics_service.dart';
+import 'services/connections_service.dart' show PersonSummary;
+import 'screens/portfolio_entry_sheet.dart';
+import 'widgets/profile_avatar.dart';
+import 'widgets/time_labels.dart' show eventDateLabel, monthYearLabel;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  // Deliberately NOT awaited. initialize() calls requestPermission(), which
+  // puts up the system notification dialog and doesn't return until the user
+  // answers it. Awaiting that here blocks runApp() — verified on an emulator
+  // 2026-09-11: the app rendered nothing but a grey screen behind the dialog
+  // for a full 60 seconds until Allow was tapped, and the FCM token only
+  // arrived afterwards. Letting it run in the background means the login
+  // screen paints immediately and the permission prompt appears over it.
+  unawaited(PushNotificationService.initialize());
+
   await ThemeController.loadSaved();
+  await AiConfig.load();
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
   );
+  // Notice richfield://auth/confirmed (supabase_flutter does the actual
+  // code-for-session exchange) so the shell can say "your email is
+  // confirmed" once. Not awaited: nothing here depends on it.
+  unawaited(EmailConfirmation.listenForDeepLink());
+  // richfield://member/<uid> (a scanned QR Connect code): RootShell opens
+  // that profile once a signed-in shell is on screen.
+  unawaited(MemberLink.listenForDeepLink());
   final authService = AuthService(Supabase.instance.client);
+  // richfield://auth/recovery (reset link tapped on this phone): once the
+  // session lands, the router parks it on /reset-password. A later ordinary
+  // sign-in clears the flag (AuthService.signIn) if the exchange never
+  // completed, so nobody is sent to "set a new password" by mistake.
+  EmailConfirmation.recoveryLinkOpened.addListener(() {
+    if (!EmailConfirmation.recoveryLinkOpened.value) return;
+    EmailConfirmation.recoveryLinkOpened.value = false;
+    authService.recoveryPending = true;
+  });
+
+  // Writes the device's FCM token onto whichever profile is signed in.
+  // Has to happen here, not inside PushNotificationService.initialize()
+  // above — that runs before Supabase.initialize() and before any user is
+  // signed in, so there's no profile row yet to write to. Covers both a
+  // fresh sign-in (the stream fires) and reopening the app with an
+  // existing session (the explicit call right after covers the case
+  // where the stream's initial emission is missed by subscribing late).
+  // onError: a failed deep-link code exchange (confirmation link opened on
+  // the wrong device, or used twice) is delivered as an error on this
+  // stream; without a handler it was an "Unhandled Exception" in logcat.
+  Supabase.instance.client.auth.onAuthStateChange.listen(
+    (_) => unawaited(PushNotificationService.syncTokenIfSignedIn()),
+    onError: (_) {},
+  );
+  unawaited(PushNotificationService.syncTokenIfSignedIn());
+
   runApp(RichfieldConnectApp(authService: authService));
 }
 
@@ -94,10 +180,10 @@ class RichfieldLogo extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 1 â€” DESIGN SYSTEM (colors, type scale, spacing, radii)
+// SECTION 1 — DESIGN SYSTEM (colors, type scale, spacing, radii)
 // Pulled 1:1 from DESIGN.md's YAML token block / code.html's Tailwind
 // config, which is the *implemented* palette (not the aspirational
-// "Crimson / Navy / Gold" palette described in DESIGN.md's prose â€” see
+// "Crimson / Navy / Gold" palette described in DESIGN.md's prose — see
 // the chat feedback on that mismatch).
 // =====================================================================
 
@@ -227,13 +313,35 @@ class AppText {
 }
 
 // =====================================================================
-// SECTION 2 â€” APP ROOT
+// SECTION 2 — APP ROOT
 // =====================================================================
 
-class RichfieldConnectApp extends StatelessWidget {
-  RichfieldConnectApp({super.key, required this.authService});
+/// NOTE (theme repair): this used to be a StatelessWidget whose build ran
+/// `routerConfig: buildAppRouter(authService)` INSIDE the
+/// ValueListenableBuilder. Because that call sits in the builder, every
+/// single dark-mode toggle constructed a brand-new GoRouter, which:
+///
+///   1. reset the navigation stack to initialLocation ('/') — so toggling
+///      the theme anywhere in the app threw the user back to the feed root
+///      and closed whatever screen they were on;
+///   2. built a new GoRouterRefreshStream each time, each one opening
+///      another subscription to authService.onAuthStateChange that was
+///      never disposed — a listener leak that grows with every toggle.
+///
+/// The router is now created exactly once and held in State. The theme
+/// still rebuilds MaterialApp (colours are re-read from AppColors on every
+/// build), but navigation and the auth subscription survive the toggle.
+class RichfieldConnectApp extends StatefulWidget {
+  const RichfieldConnectApp({super.key, required this.authService});
 
   final AuthService authService;
+
+  @override
+  State<RichfieldConnectApp> createState() => _RichfieldConnectAppState();
+}
+
+class _RichfieldConnectAppState extends State<RichfieldConnectApp> {
+  late final _router = buildAppRouter(widget.authService);
 
   @override
   Widget build(BuildContext context) {
@@ -263,6 +371,23 @@ class RichfieldConnectApp extends StatelessWidget {
       onSurface: AppColors.onSurface,
       outline: AppColors.outline,
       outlineVariant: AppColors.outlineVariant,
+      // Theme repair: these roles were never registered, so ColorScheme
+      // .fromSeed() derived them from the seed instead of using the app's
+      // own palette. Every Material surface that resolves its own
+      // container colour — Card, Dialog, BottomSheet (the account menu),
+      // SnackBar, PopupMenu, NavigationBar — therefore painted a seeded
+      // tint that did not match the hand-built AppColors panels next to
+      // it. Most visible in dark mode, where the seeded container came out
+      // washed-out purple against the navy #0D1320 the rest of the app uses.
+      onSurfaceVariant: AppColors.onSurfaceVariant,
+      surfaceContainerLowest: AppColors.surfaceContainerLowest,
+      surfaceContainerLow: AppColors.surfaceContainerLow,
+      surfaceContainer: AppColors.surfaceContainer,
+      surfaceContainerHigh: AppColors.surfaceContainerHigh,
+      surfaceContainerHighest: AppColors.surfaceContainerHighest,
+      inverseSurface: AppColors.inverseSurface,
+      onInverseSurface: AppColors.inverseOnSurface,
+      surfaceTint: AppColors.surfaceTint,
       );
 
       return MaterialApp.router(
@@ -276,7 +401,7 @@ class RichfieldConnectApp extends StatelessWidget {
         fontFamily: GoogleFonts.inter().fontFamily,
         splashFactory: InkRipple.splashFactory,
       ),
-          routerConfig: buildAppRouter(authService),
+          routerConfig: _router,
         );
       },
     );
@@ -284,7 +409,7 @@ class RichfieldConnectApp extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 3 â€” MOCK DATA MODELS + SAMPLE DATA
+// SECTION 3 — MOCK DATA MODELS + SAMPLE DATA
 // Everything here stands in for real API/database responses. Swap this
 // section out first when you connect a real backend.
 // =====================================================================
@@ -310,11 +435,11 @@ extension RichfieldRoleX on RichfieldRole {
       case RichfieldRole.student:
         return '@my.richfield.ac.za';
       case RichfieldRole.alumni:
-        return 'Verified Graduate';
+        return 'Richfield graduate';
       case RichfieldRole.corporate:
         return 'Partner Recruiter';
       case RichfieldRole.admin:
-        return 'Gateway Portal';
+        return 'Richfield staff';
     }
   }
 
@@ -332,159 +457,158 @@ extension RichfieldRoleX on RichfieldRole {
   }
 }
 
-class Credential {
-  final IconData icon;
-  final Color iconColor;
-  final Color iconBg;
-  final String title;
-  final String subtitle;
-  final String tag;
-
-  Credential({
-    required this.icon,
-    required this.iconColor,
-    required this.iconBg,
-    required this.title,
-    required this.subtitle,
-    required this.tag,
-  });
-}
-
-class RepoProject {
-  final String title;
-  final String status;
-  final String description;
-  final List<String> stack;
-  final int stars;
-  final bool hasLiveDemo;
-
-  RepoProject({
-    required this.title,
-    required this.status,
-    required this.description,
-    required this.stack,
-    required this.stars,
-    this.hasLiveDemo = true,
-  });
-}
-
-class EndorsementSkill {
-  final String skill;
-  final int count;
-  final Color accent;
-
-  EndorsementSkill({
-    required this.skill,
-    required this.count,
-    required this.accent,
-  });
-}
-
-class LeadershipRole {
-  final IconData icon;
-  final Color iconBg;
-  final String title;
-  final String org;
-  final String period;
-  final String description;
-
-  LeadershipRole({
-    required this.icon,
-    required this.iconBg,
-    required this.title,
-    required this.org,
-    required this.period,
-    required this.description,
-  });
-}
-
-class Recommendation {
-  final String quote;
-  final String name;
-  final String title;
-  final bool facultyEndorsed;
-
-  Recommendation({
-    required this.quote,
-    required this.name,
-    required this.title,
-    this.facultyEndorsed = false,
-  });
-}
-
 enum FeedPostType { text, video }
 
 class FeedPost {
+  /// Database id.
+  final String? id;
+
+  /// posts.author_id, so a card can hide Report on the viewer's own post.
+  final String? authorId;
+
+  /// Public CDN url for an image post (posts.image_path resolved through
+  /// the post-media bucket). Null for text-only and video posts.
+  final String? imageUrl;
+
+  /// Public CDN urls for a video post (posts.video_path / thumbnail_path in
+  /// the same bucket). The card shows the thumbnail and only opens the
+  /// stream when the member taps play.
+  final String? videoUrl;
+  final String? thumbnailUrl;
+
+  /// Whether the signed-in user has already reposted this.
+  final bool isReposted;
+
+  /// Whether the signed-in user has already liked this.
+  final bool isReacted;
+
   final FeedPostType type;
   final String authorName;
+
+  /// Capitalised for display ("Student"); [authorRoleKey] is the raw
+  /// profiles.role value the ranker keys on.
   final String authorRole;
+  final String authorRoleKey;
+  final DateTime createdAt;
   final bool verified;
   final String timeAgo;
   final String body;
-  final String? hashtag;
-  final JobHighlight? job;
   final String? videoLabel;
-  final String? videoDuration;
-  final List<String>? featuredProjects;
+
+  /// Reactions, comments and reposts, from the aggregate embeds in
+  /// FeedService.postFields.
   final int reactionCountA;
   final int reactionCountB;
   final int reactionCountC;
 
   FeedPost({
+    this.id,
+    this.authorId,
+    this.imageUrl,
+    this.videoUrl,
+    this.thumbnailUrl,
+    this.isReposted = false,
+    this.isReacted = false,
     required this.type,
     required this.authorName,
     required this.authorRole,
+    this.authorRoleKey = '',
+    DateTime? createdAt,
     required this.verified,
     required this.timeAgo,
     required this.body,
-    this.hashtag,
-    this.job,
     this.videoLabel,
-    this.videoDuration,
-    this.featuredProjects,
     required this.reactionCountA,
     required this.reactionCountB,
     required this.reactionCountC,
-  });
-}
+  }) : createdAt = createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
 
-class JobHighlight {
-  final String title;
-  final String company;
-  final String location;
-  final List<String> tags;
-  final String slots;
-
-  JobHighlight({
-    required this.title,
-    required this.company,
-    required this.location,
-    required this.tags,
-    required this.slots,
-  });
+  /// Cheap immutable update so the feed can flip one card's like, comment or
+  /// repost state without re-querying the whole list.
+  FeedPost copyWith({
+    bool? isReposted,
+    bool? isReacted,
+    int? reactionCountA,
+    int? reactionCountB,
+    int? reactionCountC,
+  }) {
+    return FeedPost(
+      id: id,
+      authorId: authorId,
+      imageUrl: imageUrl,
+      videoUrl: videoUrl,
+      thumbnailUrl: thumbnailUrl,
+      isReposted: isReposted ?? this.isReposted,
+      isReacted: isReacted ?? this.isReacted,
+      type: type,
+      authorName: authorName,
+      authorRole: authorRole,
+      authorRoleKey: authorRoleKey,
+      createdAt: createdAt,
+      verified: verified,
+      timeAgo: timeAgo,
+      body: body,
+      videoLabel: videoLabel,
+      reactionCountA: reactionCountA ?? this.reactionCountA,
+      reactionCountB: reactionCountB ?? this.reactionCountB,
+      reactionCountC: reactionCountC ?? this.reactionCountC,
+    );
+  }
 }
 
 // Maps a real `posts` row (joined to `profiles` for the author) onto the
-// existing FeedPost UI model, so FeedScreen's card widgets don't need to
-// change — only where the data comes from.
-FeedPost _feedPostFromRow(Map<String, dynamic> row) {
+// FeedPost UI model shared by the Feed and Portfolio cards.
+FeedPost _feedPostFromRow(
+  Map<String, dynamic> row, {
+  Set<String> repostedIds = const <String>{},
+  Set<String> reactedIds = const <String>{},
+  MediaService? mediaService,
+}) {
   final profile = row['profiles'] as Map<String, dynamic>?;
+  final id = row['id'] as String?;
+  final imagePath = row['image_path'] as String?;
+  final videoPath = row['video_path'] as String?;
+  final thumbnailPath = row['thumbnail_path'] as String?;
   final name = ('${profile?['first_name'] ?? ''} ${profile?['last_name'] ?? ''}').trim();
   final role = profile?['role'] as String?;
   final createdAt = DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now();
   return FeedPost(
+    id: id,
+    authorId: row['author_id'] as String?,
+    imageUrl: (imagePath != null && imagePath.isNotEmpty && mediaService != null)
+        ? mediaService.postImageUrl(imagePath)
+        : null,
+    videoUrl: (videoPath != null && videoPath.isNotEmpty && mediaService != null)
+        ? mediaService.postVideoUrl(videoPath)
+        : null,
+    thumbnailUrl: (thumbnailPath != null && thumbnailPath.isNotEmpty && mediaService != null)
+        ? mediaService.postImageUrl(thumbnailPath)
+        : null,
+    isReposted: id != null && repostedIds.contains(id),
+    isReacted: id != null && reactedIds.contains(id),
     type: row['video_path'] != null ? FeedPostType.video : FeedPostType.text,
     authorName: name.isEmpty ? 'Richfield Member' : name,
     authorRole: role == null || role.isEmpty ? '' : role[0].toUpperCase() + role.substring(1),
+    authorRoleKey: role ?? '',
+    createdAt: createdAt,
     verified: true,
     timeAgo: _timeAgo(createdAt),
     body: row['body'] as String? ?? '',
     videoLabel: row['video_path'] != null ? 'Video post' : null,
-    videoDuration: row['video_path'] != null ? '' : null,
-    reactionCountA: 0,
-    reactionCountB: 0,
-    reactionCountC: 0,
+    reactionCountA: _embeddedCount(row['reactions']),
+    reactionCountB: _embeddedCount(row['comments']),
+    reactionCountC: _embeddedCount(row['post_reposts']),
   );
+}
+
+/// A PostgREST aggregate embed such as `post_reposts(count)` comes back as
+/// [{'count': n}], or an empty list when nothing references the row.
+int _embeddedCount(Object? embed) {
+  if (embed is List && embed.isNotEmpty) {
+    final first = embed.first;
+    if (first is Map && first['count'] is int) return first['count'] as int;
+  }
+  return 0;
 }
 
 String _timeAgo(DateTime dt) {
@@ -495,210 +619,12 @@ String _timeAgo(DateTime dt) {
   return '${diff.inDays}d ago';
 }
 
-class JobListing {
-  final String title;
-  final String company;
-  final String location;
-  final String type;
-  final List<String> skills;
-  final bool approved;
-
-  JobListing({
-    required this.title,
-    required this.company,
-    required this.location,
-    required this.type,
-    required this.skills,
-    this.approved = true,
-  });
-}
-
-class ConnectionSuggestion {
-  final String name;
-  final String subtitle;
-  final String initials;
-
-  ConnectionSuggestion({
-    required this.name,
-    required this.subtitle,
-    required this.initials,
-  });
-}
-
-class MockData {
-  MockData._();
-
-  static List<Credential> get credentials => [
-    Credential(
-      icon: Icons.cloud_done_outlined,
-      iconColor: AppColors.secondary,
-      iconBg: AppColors.secondaryContainer,
-      title: 'AWS Certified Cloud Practitioner',
-      subtitle: 'Amazon Web Services â€¢ Verify ID: AWS-7890241 â€¢ Exp 2027',
-      tag: '',
-    ),
-    Credential(
-      icon: Icons.military_tech_outlined,
-      iconColor: AppColors.primary,
-      iconBg: AppColors.onPrimaryContainer,
-      title: "Dean's Commendation 2024",
-      subtitle: 'Richfield Faculty of IT â€¢ Top 1% GPA',
-      tag: 'Ref: RF-ACAD-2024-SK',
-    ),
-    Credential(
-      icon: Icons.emoji_events_outlined,
-      iconColor: AppColors.tertiary,
-      iconBg: AppColors.tertiaryContainer,
-      title: 'Hackathon 1st Runner-Up',
-      subtitle: 'FinTech Disrupt SA 2024 Challenge â€¢ Real-time Payments',
-      tag: '',
-    ),
-  ];
-
-  static final repos = [
-    RepoProject(
-      title: 'Richfield Campus Navigator',
-      status: 'Production Ready',
-      description:
-          'Cross-platform indoor navigation & timetable coordination system for students with live campus beacon triangulation.',
-      stack: ['React Native', 'Supabase', 'TypeScript', 'Mapbox GL'],
-      stars: 42,
-    ),
-    RepoProject(
-      title: 'FinTech Micro-Savings Engine',
-      status: 'MIT Licensed',
-      description:
-          'High-throughput asynchronous banking core with automated round-up savings routines and ISO 20022 compliant messaging.',
-      stack: ['Golang', 'PostgreSQL', 'Docker', 'gRPC'],
-      stars: 28,
-    ),
-  ];
-
-  static List<EndorsementSkill> get endorsements => [
-    EndorsementSkill(skill: 'TypeScript', count: 14, accent: AppColors.secondary),
-    EndorsementSkill(skill: 'Flutter & Dart', count: 10, accent: AppColors.primary),
-    EndorsementSkill(skill: 'PostgreSQL', count: 8, accent: AppColors.tertiary),
-    EndorsementSkill(skill: 'Python & ML', count: 11, accent: AppColors.successGreen),
-  ];
-
-  static List<LeadershipRole> get leadership => [
-    LeadershipRole(
-      icon: Icons.badge_outlined,
-      iconBg: AppColors.onPrimaryContainer,
-      title: 'SRC Technology Officer',
-      org: 'Richfield Student Representative Council',
-      period: '2024 â€“ 2025',
-      description:
-          'Spearheaded the digitisation of student guild election voting systems, driving 78% student turnout without downtime.',
-    ),
-    LeadershipRole(
-      icon: Icons.hub_outlined,
-      iconBg: AppColors.secondaryContainer,
-      title: 'Google DSC Lead',
-      org: 'Developer Student Club Braamfontein',
-      period: '2023 â€“ 2024',
-      description:
-          'Organised weekly peer coding clinics, mentoring over 120 lower-cohort students in Git workflows and cloud deployments.',
-    ),
-  ];
-
-  static final recommendations = [
-    Recommendation(
-      quote:
-          'Sipho has consistently demonstrated exceptional full-stack capabilities, analytical maturity, and rigorous systems thinking. His contribution to distributed microservices research ranks him among the top software scholars our campus has fostered in the past decade.',
-      name: 'Dr. N. Pillay, Ph.D.',
-      title: 'Senior Lecturer, Faculty of Information Technology',
-      facultyEndorsed: true,
-    ),
-  ];
-
-  static final feedPosts = [
-    FeedPost(
-      type: FeedPostType.text,
-      authorName: 'Thabo Ndlovu',
-      authorRole: "Senior Software Engineer at Discover... â€¢ Alumni '21",
-      verified: true,
-      timeAgo: '3h ago',
-      body:
-          "Excited to share that our engineering team at Discovery is opening 15 graduate internship slots for Richfield BSc IT & Computer Science graduates! Check the Opportunities tab or apply with your Richfield verified profile.",
-      job: JobHighlight(
-        title: 'Junior Cloud & Backend Engineer',
-        company: 'Discovery Digital Tech Campus',
-        location: 'Sandton, JHB (Hybrid)',
-        tags: ['Python', 'AWS CDK', 'Spring Boot', 'BSc IT 2024/2025'],
-        slots: '15 SLOTS',
-      ),
-      reactionCountA: 142,
-      reactionCountB: 38,
-      reactionCountC: 19,
-    ),
-    FeedPost(
-      type: FeedPostType.video,
-      authorName: 'Amara Okafor',
-      authorRole: 'Student Ambassador & Full-Stack Dev... â€¢ 3rd Year IT',
-      verified: true,
-      timeAgo: '5h ago',
-      body:
-          'Day in the life of a Richfield final year student prepping for the annual hackathon!',
-      hashtag: '#TechInSA #RichfieldGrads',
-      videoLabel: 'Richfield Cloud Transcoded 1080p',
-      videoDuration: '01:24',
-      featuredProjects: ['FinTech Microservices', 'AWS DynamoDB'],
-      reactionCountA: 289,
-      reactionCountB: 52,
-      reactionCountC: 1400,
-    ),
-  ];
-
-  static final jobs = [
-    JobListing(
-      title: 'Graduate Software Engineer',
-      company: 'Standard Bank Digital',
-      location: 'Rosebank, JHB (Hybrid)',
-      type: 'Graduate Programme',
-      skills: ['Java', 'Kotlin', 'REST APIs'],
-    ),
-    JobListing(
-      title: 'Data Analyst Intern',
-      company: 'Vodacom Insights Lab',
-      location: 'Midrand, JHB (On-site)',
-      type: 'Internship',
-      skills: ['SQL', 'Python', 'Power BI'],
-    ),
-    JobListing(
-      title: 'Mobile Engineer (Flutter)',
-      company: 'Naspers Labs',
-      location: 'Cape Town (Remote)',
-      type: 'Learnership',
-      skills: ['Flutter', 'Dart', 'Firebase'],
-    ),
-  ];
-
-  static final suggestions = [
-    ConnectionSuggestion(
-      name: 'Priya Naidoo',
-      subtitle: 'BCom Business Admin â€¢ Class of 2025',
-      initials: 'PN',
-    ),
-    ConnectionSuggestion(
-      name: 'Karabo Sekhu',
-      subtitle: 'Recruiter @ Absa Tech',
-      initials: 'KS',
-    ),
-    ConnectionSuggestion(
-      name: 'Liam van der Merwe',
-      subtitle: 'BSc IT â€¢ Alumni 2022',
-      initials: 'LV',
-    ),
-  ];
-}
-
 // =====================================================================
-// SECTION 4 â€” SHARED SMALL WIDGETS
+// SECTION 4 — SHARED SMALL WIDGETS
 // =====================================================================
 
 /// Small rounded pill used for verification badges, status tags, and
-/// filter chips throughout the app â€” mirrors the Stitch "chip" component.
+/// filter chips throughout the app — mirrors the Stitch "chip" component.
 class Pill extends StatelessWidget {
   final String text;
   final Color background;
@@ -918,7 +844,7 @@ class RoundedCard extends StatelessWidget {
   }
 }
 
-/// Circular initials avatar â€” stands in for a real profile photo so this
+/// Circular initials avatar — stands in for a real profile photo so this
 /// prototype never depends on network images.
 class InitialsAvatar extends StatelessWidget {
   final String initials;
@@ -1019,17 +945,29 @@ class RichfieldHeader extends StatelessWidget {
               color: AppColors.primary,
             ),
           ),
-          IconButton(
-            onPressed: () {},
-            icon: Icon(Icons.notifications_none_rounded),
-            color: AppColors.onSurface,
+          // Was IconButton(onPressed: () {}) — a bell that did nothing. The
+          // badge is RealtimeHub's unread count, updated over the WebSocket.
+          ValueListenableBuilder<int>(
+            valueListenable: RealtimeHub.instance.unreadNotifications,
+            builder: (context, unread, _) => IconButton(
+              tooltip: 'Notifications',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => NotificationsScreen()),
+              ),
+              icon: Badge(
+                isLabelVisible: unread > 0,
+                label: Text(unread > 99 ? '99+' : '$unread'),
+                child: Icon(Icons.notifications_none_rounded),
+              ),
+              color: AppColors.onSurface,
+            ),
           ),
           GestureDetector(
             onTap: onAvatarTap,
             child: CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.primary,
-              child: Icon(Icons.person, size: 18, color: Colors.white),
+              child: Icon(Icons.person, size: 18, color: AppColors.onPrimary),
             ),
           ),
         ],
@@ -1038,45 +976,101 @@ class RichfieldHeader extends StatelessWidget {
   }
 }
 
-// Shared account-menu bottom sheet (Onboarding Tour / Log Out). Top-level so
-// every tab's RichfieldHeader.onAvatarTap can call it, not just Portfolio's.
-void _openAccountMenu(BuildContext context, AuthService authService) {
-  showModalBottomSheet(
+// A modal bottom sheet that can never overflow off the bottom of the screen:
+// isScrollControlled removes the default 9/16-of-screen height cap, and
+// wrapping the content in a SingleChildScrollView means anything still too
+// tall for a short screen or a large accessibility text size scrolls instead
+// of throwing a RenderFlex overflow. The plain QR code sheet (below) did
+// exactly that on Keshav's phone (2026-09-12): a 220x220 code plus five lines
+// of text through the default cap, with the overflow banner bleeding toward
+// the system navigation bar. Every fixed-menu bottom sheet uses this now.
+Future<T?> _scrollSafeSheet<T>(BuildContext context, {required WidgetBuilder builder}) {
+  return showModalBottomSheet<T>(
     context: context,
+    isScrollControlled: true,
     backgroundColor: AppColors.surfaceContainerLowest,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
     ),
-    builder: (_) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(Icons.help_outline),
-            title: Text('Take the Onboarding Tour'),
-            onTap: () {
-              Navigator.pop(context);
-              _startOnboardingTour(context);
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.logout, color: AppColors.error),
-            title: Text('Log Out', style: TextStyle(color: AppColors.error)),
-            onTap: () async {
-              Navigator.pop(context);
-              await authService.signOut();
-              // go_router's redirect (listening to onAuthStateChange)
-              // bounces to /login on its own — no manual navigation here.
-            },
-          ),
-        ],
-      ),
+    builder: (sheet) => SafeArea(
+      child: SingleChildScrollView(child: builder(sheet)),
     ),
   );
 }
 
-void _startOnboardingTour(BuildContext context) {
-  Navigator.of(context).push(
+// Shared account-menu bottom sheet (Onboarding Tour / Log Out). Top-level so
+// every tab's RichfieldHeader.onAvatarTap can call it, not just Portfolio's.
+void _openAccountMenu(BuildContext context, AuthService authService) {
+  unawaited(_scrollSafeSheet<void>(
+    context,
+    builder: (_) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          leading: Icon(Icons.help_outline),
+          title: Text('Take the Onboarding Tour'),
+          onTap: () {
+            Navigator.pop(context);
+            _startOnboardingTour(context);
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.route_outlined),
+          title: Text('Career pathways'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => CareerPathwaysScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.event_outlined),
+          title: Text('Events'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => EventsScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.auto_awesome_outlined),
+          title: Text('Career AI assistant'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => AiAssistantScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.privacy_tip_outlined),
+          title: Text('Privacy & data'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => PrivacySettingsScreen()),
+            );
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.logout, color: AppColors.error),
+          title: Text('Log Out', style: TextStyle(color: AppColors.error)),
+          onTap: () async {
+            Navigator.pop(context);
+            await authService.signOut();
+            // go_router's redirect (listening to onAuthStateChange)
+            // bounces to /login on its own — no manual navigation here.
+          },
+        ),
+      ],
+    ),
+  ));
+}
+
+Future<void> _startOnboardingTour(BuildContext context) {
+  return Navigator.of(context).push(
     PageRouteBuilder(
       opaque: false,
       barrierDismissible: true,
@@ -1087,13 +1081,18 @@ void _startOnboardingTour(BuildContext context) {
 }
 
 // =====================================================================
-// SECTION 5 â€” AUTH: LOGIN SCREEN
+// SECTION 5 — AUTH: LOGIN SCREEN
 // =====================================================================
 
 class LoginScreen extends StatefulWidget {
-  LoginScreen({super.key, required this.authService});
+  LoginScreen({super.key, required this.authService, this.notice});
 
   final AuthService authService;
+
+  /// Why the user landed here without asking to (e.g. the router signed
+  /// the device out after an administrator removed the account). Shown in
+  /// the same slot as a sign-in error; cleared on the next attempt.
+  final String? notice;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -1102,14 +1101,60 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   RichfieldRole _selectedRole = RichfieldRole.student;
   bool _obscure = true;
-  bool _trustDevice = true;
   bool _submitting = false;
   String? _errorMessage;
+
+  /// Set when sign-in failed because the address was never confirmed, so
+  /// the screen can offer "Resend confirmation email" for that address.
+  String? _unconfirmedEmail;
+  bool _resending = false;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  Timer? _confirmedLinkTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _errorMessage = widget.notice;
+    EmailConfirmation.justConfirmed.addListener(_onConfirmationLink);
+  }
+
+  /// The confirmation link opened the app but no session followed: the
+  /// code was minted on another device, or already used. GoTrue confirmed
+  /// the address before redirecting, so say that instead of nothing.
+  void _onConfirmationLink() {
+    if (!EmailConfirmation.justConfirmed.value) return;
+    _confirmedLinkTimer?.cancel();
+    _confirmedLinkTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || widget.authService.currentSession != null) return;
+      EmailConfirmation.justConfirmed.value = false;
+      setState(() => _errorMessage = 'Your email is confirmed. Sign in to continue.');
+    });
+  }
+
+  Future<void> _resendConfirmation() async {
+    final email = _unconfirmedEmail;
+    if (email == null) return;
+    setState(() => _resending = true);
+    try {
+      await widget.authService.resendSignupEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent a new confirmation email to $email.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
+  }
+
   @override
   void dispose() {
+    _confirmedLinkTimer?.cancel();
+    EmailConfirmation.justConfirmed.removeListener(_onConfirmationLink);
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -1123,6 +1168,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _submitting = true;
       _errorMessage = null;
+      _unconfirmedEmail = null;
     });
     try {
       await widget.authService.signIn(
@@ -1130,7 +1176,12 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
     } catch (e) {
-      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+      setState(() {
+        _errorMessage = AuthErrorMapper.fromAny(e);
+        if (e is AuthException && e.message.toLowerCase().contains('not confirmed')) {
+          _unconfirmedEmail = _emailController.text.trim();
+        }
+      });
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -1146,30 +1197,10 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              RoundedCard(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                color: AppColors.onPrimaryContainer.withOpacity(0.3),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    Icon(Icons.lock_outline, size: 18, color: AppColors.primary),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Richfield Secure Vault Initialisingâ€¦', style: AppText.labelMd()),
-                          Text('256-Bit Hardware Handshake',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Text('VAULT ONLINE',
-                        style: AppText.labelBadge(color: AppColors.primary)),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.xl),
+              // A "Richfield Secure Vault Initialising… / 256-Bit Hardware
+              // Handshake / VAULT ONLINE" banner sat here. It was decoration:
+              // sign-in is Supabase email and password over HTTPS.
+              SizedBox(height: AppSpace.lg),
               Center(
                 child: Container(
                   width: 72,
@@ -1206,20 +1237,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     foreground: AppColors.tertiary,
                     icon: Icons.school_outlined,
                   ),
-                  SizedBox(width: AppSpace.sm),
-                  Pill(
-                    text: '256-Bit Vault',
-                    background: AppColors.errorContainer,
-                    foreground: AppColors.error,
-                    icon: Icons.shield_outlined,
-                  ),
                 ],
               ),
               SizedBox(height: AppSpace.xl),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Select Access', style: AppText.labelLg()),
+                  Text('Account type', style: AppText.labelLg()),
                   Text('TAP TO SWITCH',
                       style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
                 ],
@@ -1254,10 +1278,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Student Domain Policy', style: AppText.labelMd()),
+                          Text('Student email policy', style: AppText.labelMd()),
                           SizedBox(height: 2),
                           Text(
-                            'Direct instant sign-in requires an authentic institutional inbox (@my.richfield.ac.za or @my.aaa.ac.za).',
+                            'Student accounts are registered with a Richfield or AAA address: @my.richfield.ac.za, @richfield.ac.za, @my.aaa.ac.za or @aaa.ac.za.',
                             style: AppText.bodySm(color: AppColors.onSurfaceVariant),
                           ),
                         ],
@@ -1266,31 +1290,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   ],
                 ),
               ),
-              SizedBox(height: AppSpace.base),
-              OutlinedButton.icon(
-                onPressed: _signIn,
-                icon: Icon(Icons.g_mobiledata, size: 28, color: AppColors.onSurface),
-                label: Text('Continue with Institutional Google', style: AppText.labelLg()),
-                style: OutlinedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(vertical: 14),
-                  side: BorderSide(color: AppColors.outlineVariant),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                  ),
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              Row(
-                children: [
-                  Expanded(child: Divider(color: AppColors.outlineVariant)),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('OR CREDENTIALS LOGIN',
-                        style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-                  ),
-                  Expanded(child: Divider(color: AppColors.outlineVariant)),
-                ],
-              ),
+              // "Continue with Institutional Google" was here, wired to the
+              // same email/password _signIn as the form below. Google isn't
+              // enabled as a Supabase Auth provider, so it can't be real yet.
               SizedBox(height: AppSpace.base),
                 Text(_selectedRole == RichfieldRole.corporate
                   ? 'Work Email'
@@ -1303,23 +1305,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.alternate_email, size: 18),
-                    hintText: _selectedRole == RichfieldRole.corporate
-                      ? 'name@company.co.za'
-                      : _selectedRole == RichfieldRole.admin
-                        ? 'admin@richfield.ac.za'
-                        : 'student.id',
-                  suffixIcon: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                    child: Pill(
-                        text: _selectedRole == RichfieldRole.corporate
-                          ? 'WORK EMAIL'
-                          : _selectedRole == RichfieldRole.admin
-                            ? '@richfield.ac.za'
-                            : '@my.richfield',
-                      background: AppColors.surfaceContainerHigh,
-                      foreground: AppColors.onSurfaceVariant,
-                    ),
-                  ),
+                  // The full address is what signs you in. The old hint,
+                  // 'student.id' beside a '@my.richfield' pill, suggested the
+                  // domain gets filled in for you; it doesn't.
+                  hintText: switch (_selectedRole) {
+                    RichfieldRole.corporate => 'you@company.co.za',
+                    RichfieldRole.admin => 'you@richfield.ac.za',
+                    RichfieldRole.alumni => 'you@example.com',
+                    RichfieldRole.student => 'you@my.richfield.ac.za',
+                  },
                   filled: true,
                   fillColor: AppColors.surfaceContainerLow,
                   border: OutlineInputBorder(
@@ -1332,8 +1326,26 @@ class _LoginScreenState extends State<LoginScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Network', style: AppText.labelLg()),
-                  Text('Forgot?', style: AppText.labelMd(color: AppColors.primary)),
+                  Text('Password', style: AppText.labelLg()),
+                  // Was a bare Text() styled to look like a link — no
+                  // GestureDetector, no InkWell, no route. Nothing to tap.
+                  TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ForgotPasswordScreen(
+                          authService: widget.authService,
+                          initialEmail: _emailController.text,
+                        ),
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      minimumSize: Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text('Forgot?',
+                        style: AppText.labelMd(color: AppColors.primary)),
+                  ),
                 ],
               ),
               SizedBox(height: 6),
@@ -1355,25 +1367,30 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
               ),
-              SizedBox(height: AppSpace.sm),
-              CheckboxListTile(
-                value: _trustDevice,
-                onChanged: (v) => setState(() => _trustDevice = v ?? true),
-                controlAffinity: ListTileControlAffinity.leading,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text('Trust this device for 30 days via Richfield Mobile Token',
-                    style: AppText.bodySm()),
-              ),
+              // A "Trust this device for 30 days via Richfield Mobile Token"
+              // checkbox was here, bound to a bool nothing read. Sessions
+              // already persist until sign-out.
+              SizedBox(height: AppSpace.md),
               if (_errorMessage != null) ...[
                 Padding(
                   padding: EdgeInsets.only(bottom: AppSpace.sm),
                   child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
                 ),
               ],
+              if (_unconfirmedEmail != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _resending ? null : _resendConfirmation,
+                    icon: Icon(Icons.forward_to_inbox_outlined, size: 18),
+                    label: Text(_resending ? 'Sending…' : 'Resend confirmation email'),
+                  ),
+                ),
               SizedBox(height: AppSpace.sm),
               PrimaryButton(
-                label: _submitting ? 'SIGNING IN…' : 'SIGN IN AS ${_selectedRole.label.toUpperCase()}',
+                // The account-type tiles only change the hints; the account's
+                // real role comes from its profile after sign-in.
+                label: _submitting ? 'SIGNING IN…' : 'SIGN IN',
                 icon: Icons.key_outlined,
                 onPressed: _submitting ? null : _signIn,
               ),
@@ -1425,7 +1442,7 @@ class _RoleTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(role.icon, size: 20, color: selected ? Colors.white : AppColors.onSurfaceVariant),
+            Icon(role.icon, size: 20, color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant),
             SizedBox(width: 8),
             Expanded(
               child: Column(
@@ -1433,14 +1450,14 @@ class _RoleTile extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(role.label,
-                      style: AppText.labelLg(color: selected ? Colors.white : AppColors.onSurface)),
+                      style: AppText.labelLg(color: selected ? AppColors.onPrimary : AppColors.onSurface)),
                   Text(role.sublabel,
                       style: AppText.bodySm(
-                          color: selected ? Colors.white70 : AppColors.onSurfaceVariant)),
+                          color: selected ? AppColors.onPrimary.withOpacity(0.7) : AppColors.onSurfaceVariant)),
                 ],
               ),
             ),
-            if (selected) Icon(Icons.check_circle, color: Colors.white, size: 18),
+            if (selected) Icon(Icons.check_circle, color: AppColors.onPrimary, size: 18),
           ],
         ),
       ),
@@ -1449,7 +1466,7 @@ class _RoleTile extends StatelessWidget {
 }
 
 // =====================================================================
-// SECTION 6 â€” AUTH: REGISTER SCREEN
+// SECTION 6 — AUTH: REGISTER SCREEN
 // =====================================================================
 
 class RegisterScreen extends StatefulWidget {
@@ -1466,24 +1483,100 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _agreed = false;
   bool _submitting = false;
   String? _errorMessage;
+
+  /// Set when signUp succeeds without a session, which is always the case
+  /// while email confirmation is on. The form used to stay on screen with no
+  /// sign that anything had happened, because go_router only redirects once a
+  /// session exists.
+  String? _confirmationSentTo;
+
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _programmeController = TextEditingController();
+  final _studentNumberController = TextEditingController();
+  final _enrolmentYearController = TextEditingController();
+  final _graduationYearController = TextEditingController();
+  final _companyNameController = TextEditingController();
+  final _industryController = TextEditingController();
+  final _locationController = TextEditingController();
 
   static final _tabs = ['Student', 'Alumni', 'Employer'];
   static final _tabIcons = [Icons.school_outlined, Icons.workspace_premium_outlined, Icons.apartment_outlined];
 
-  // No campuses lookup table exists in the DB (campus is a free-text
-  // column elsewhere in the schema) and the selection isn't persisted on
-  // signup yet — this list only makes the dropdown itself functional.
+  // No campuses lookup table exists (education.campus is free text). A fixed
+  // list keeps the spelling consistent, which matters now that the campus is
+  // saved and programme comparisons group students by what they entered.
   static const _campuses = ['Braamfontein', 'Cape Town', 'Durban', 'Pretoria', 'Nelspruit', 'Vereeniging'];
   String _campus = _campuses.first;
 
+  static final _fourDigits = RegExp(r'^\d{4}$');
+
+  /// "Check your inbox" step: the 6-digit code from the confirmation email.
+  final _codeController = TextEditingController();
+  bool _verifyingCode = false;
+  bool _resendingCode = false;
+  String? _codeError;
+
+  Future<void> _verifyCode(String email) async {
+    final code = _codeController.text.trim();
+    if (code.length != 6) {
+      setState(() => _codeError = 'Enter the 6-digit code from the email.');
+      return;
+    }
+    setState(() {
+      _verifyingCode = true;
+      _codeError = null;
+    });
+    try {
+      await widget.authService.verifySignupCode(email: email, code: code);
+      // Confirmed and signed in. go_router's redirect now routes by
+      // account status: home for students, the pending-approval screen for
+      // alumni and business accounts. Either shows the welcome once.
+      EmailConfirmation.justConfirmed.value = true;
+      if (mounted) context.go('/home');
+    } catch (e) {
+      if (mounted) setState(() => _codeError = AuthErrorMapper.fromAny(e));
+    } finally {
+      if (mounted) setState(() => _verifyingCode = false);
+    }
+  }
+
+  Future<void> _resendCode(String email) async {
+    setState(() => _resendingCode = true);
+    try {
+      await widget.authService.resendSignupEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent a new email to $email.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _resendingCode = false);
+    }
+  }
+
+  List<TextEditingController> get _controllers => [
+        _codeController,
+        _fullNameController,
+        _emailController,
+        _passwordController,
+        _programmeController,
+        _studentNumberController,
+        _enrolmentYearController,
+        _graduationYearController,
+        _companyNameController,
+        _industryController,
+        _locationController,
+      ];
+
   @override
   void dispose() {
-    _fullNameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
+    for (final controller in _controllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -1501,28 +1594,111 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  String _text(TextEditingController controller) => controller.text.trim();
+
+  String? _yearProblem(String label, TextEditingController controller, {required bool required}) {
+    final value = _text(controller);
+    if (value.isEmpty) return required ? '$label is required.' : null;
+    final year = int.tryParse(value);
+    final latest = DateTime.now().year + 8;
+    if (!_fourDigits.hasMatch(value) || year == null || year < 1970 || year > latest) {
+      return '$label must be a year between 1970 and $latest.';
+    }
+    return null;
+  }
+
+  String? _yearOrderProblem() {
+    final started = int.tryParse(_text(_enrolmentYearController));
+    final graduated = int.tryParse(_text(_graduationYearController));
+    if (started != null && graduated != null && graduated < started) {
+      return "Graduation year can't be before the year you started.";
+    }
+    return null;
+  }
+
+  /// The first thing missing or invalid for the selected account type. The
+  /// required fields are the ones migration 028 needs to create the row: a
+  /// student's education (programme, campus, start year), an alumnus's
+  /// verification claim (student number, programme, campus, graduation year)
+  /// and a business profile (company name).
+  String? _validate() {
+    if (_text(_fullNameController).isEmpty) return 'Enter your full name.';
+    if (_text(_emailController).isEmpty) return 'Enter your email address.';
+    switch (_tab) {
+      case 0:
+        if (_text(_programmeController).isEmpty) return 'Enter your programme.';
+        return _yearProblem('Year started', _enrolmentYearController, required: true) ??
+            _yearProblem('Graduation year', _graduationYearController, required: false) ??
+            _yearOrderProblem();
+      case 1:
+        if (_text(_studentNumberController).isEmpty) return 'Enter the student number you studied under.';
+        if (_text(_programmeController).isEmpty) return 'Enter the programme you completed.';
+        return _yearProblem('Year started', _enrolmentYearController, required: false) ??
+            _yearProblem('Graduation year', _graduationYearController, required: true) ??
+            _yearOrderProblem();
+      default:
+        if (_text(_companyNameController).isEmpty) return 'Enter your company name.';
+        return null;
+    }
+  }
+
+  /// Only the fields this account type's form shows, and only filled-in ones.
+  Map<String, Object> _details() {
+    final details = <String, Object>{'registration_consent': true};
+    void put(String key, TextEditingController controller) {
+      final value = _text(controller);
+      if (value.isNotEmpty) details[key] = value;
+    }
+
+    if (_tab == 2) {
+      put('company_name', _companyNameController);
+      put('industry', _industryController);
+      put('location', _locationController);
+    } else {
+      put('programme', _programmeController);
+      details['campus'] = _campus;
+      put('enrolment_year', _enrolmentYearController);
+      put('graduation_year', _graduationYearController);
+      if (_tab == 1) put('student_number', _studentNumberController);
+    }
+    return details;
+  }
+
   Future<void> _submit() async {
-    // Naive split of "Full Legal Name" into first/last on the first space —
+    final problem = _validate();
+    if (problem != null) {
+      setState(() => _errorMessage = problem);
+      return;
+    }
+
+    // Naive split of "Full name" into first/last on the first space —
     // a hackathon-pace shortcut, not a real name-parsing solution.
-    final fullName = _fullNameController.text.trim();
+    final fullName = _text(_fullNameController);
     final spaceIndex = fullName.indexOf(' ');
     final firstName = spaceIndex == -1 ? (fullName.isEmpty ? null : fullName) : fullName.substring(0, spaceIndex);
     final lastName = spaceIndex == -1 ? null : fullName.substring(spaceIndex + 1).trim();
+    final email = _text(_emailController);
 
     setState(() {
       _submitting = true;
       _errorMessage = null;
     });
     try {
-      await widget.authService.signUp(
-        email: _emailController.text.trim(),
+      final response = await widget.authService.signUp(
+        email: email,
         password: _passwordController.text,
         role: _signupRole,
         firstName: firstName,
         lastName: lastName,
+        details: _details(),
       );
+      // A session only comes back if email confirmation is switched off, in
+      // which case go_router's redirect takes over on its own.
+      if (response.session == null && mounted) {
+        setState(() => _confirmationSentTo = email);
+      }
     } catch (e) {
-      setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
+      if (mounted) setState(() => _errorMessage = AuthErrorMapper.fromAny(e));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -1530,6 +1706,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final confirmationSentTo = _confirmationSentTo;
     return Scaffold(
       backgroundColor: AppColors.surfaceContainerLow,
       appBar: AppBar(
@@ -1541,241 +1718,318 @@ class _RegisterScreenState extends State<RegisterScreen> {
         top: false,
         child: SingleChildScrollView(
           padding: EdgeInsets.all(AppSpace.base),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+          child: confirmationSentTo == null ? _form() : _confirmationView(confirmationSentTo),
+        ),
+      ),
+    );
+  }
+
+  Widget _confirmationView(String email) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: AppSpace.xl),
+        Icon(Icons.mark_email_read_outlined, size: 56, color: AppColors.primary),
+        SizedBox(height: AppSpace.md),
+        Text('Check your inbox', textAlign: TextAlign.center, style: AppText.headlineLg()),
+        SizedBox(height: AppSpace.sm),
+        Text(
+          'We emailed a 6-digit code to $email. Enter it here, or tap the link in the email on this phone.',
+          textAlign: TextAlign.center,
+          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+        ),
+        SizedBox(height: AppSpace.lg),
+        TextField(
+          controller: _codeController,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          maxLength: 6,
+          autofillHints: const [AutofillHints.oneTimeCode],
+          style: AppText.headlineLg(),
+          decoration: InputDecoration(
+            counterText: '',
+            hintText: '••••••',
+            filled: true,
+            fillColor: AppColors.surfaceContainerLowest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          onSubmitted: (_) => _verifyCode(email),
+        ),
+        if (_codeError != null) ...[
+          SizedBox(height: AppSpace.sm),
+          Text(_codeError!, textAlign: TextAlign.center, style: AppText.bodySm(color: AppColors.error)),
+        ],
+        SizedBox(height: AppSpace.md),
+        PrimaryButton(
+          label: _verifyingCode ? 'Checking…' : 'Confirm my email',
+          icon: Icons.verified_outlined,
+          onPressed: _verifyingCode ? null : () => _verifyCode(email),
+        ),
+        TextButton(
+          onPressed: _resendingCode ? null : () => _resendCode(email),
+          child: Text(_resendingCode ? 'Sending…' : 'Resend the email'),
+        ),
+        if (_tab != 0) ...[
+          SizedBox(height: AppSpace.sm),
+          SizedBox(height: AppSpace.md),
+          RoundedCard(
+            child: Text(
+              _tab == 1
+                  ? 'After you confirm, a Richfield administrator checks your student number and graduation details. You can use the app once they approve your account.'
+                  : 'After you confirm, a Richfield administrator reviews your company. You can use the app once they approve your account.',
+              style: AppText.bodyMd(),
+            ),
+          ),
+        ],
+        SizedBox(height: AppSpace.lg),
+        TextButton.icon(
+          icon: Icon(Icons.login, size: 18),
+          label: Text('I\'ll sign in later'),
+          onPressed: () => context.go('/login'),
+        ),
+      ],
+    );
+  }
+
+  String get _howItWorks => switch (_tab) {
+        1 => 'A Richfield administrator checks your student number and graduation year before your account is activated.',
+        2 => 'A Richfield administrator reviews your company before your account is activated.',
+        _ => 'Confirm your student email from your inbox, then sign in. There is no approval step.',
+      };
+
+  String get _consentText {
+    final review = switch (_tab) {
+      1 => ', and to a Richfield administrator checking my student details',
+      2 => ', and to a Richfield administrator reviewing my company details',
+      _ => '',
+    };
+    return 'I consent to Richfield Connect storing the details above to run my account and show my profile to other members$review, in line with POPIA.';
+  }
+
+  Widget _form() {
+    final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
+    final (emailLabel, emailHint, emailNote) = switch (_tab) {
+      1 => ('Email address', 'you@example.com', 'Any address you check. You don\'t need your old student inbox.'),
+      2 => ('Work email', 'you@company.co.za', 'Use your company address so the administrator can see who you work for.'),
+      _ => (
+          'Student email',
+          'you@my.richfield.ac.za',
+          'Must end in @my.richfield.ac.za, @richfield.ac.za, @my.aaa.ac.za or @aaa.ac.za.',
+        ),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('RICHFIELD GRADUATE NETWORK',
-                            style: AppText.labelBadge(color: AppColors.primary)),
-                        Text('Join the Talent Nexus', style: AppText.headlineLg()),
-                      ],
-                    ),
-                  ),
-                  Pill(
-                    text: 'ACCREDITED',
-                    background: AppColors.successGreenBg,
-                    foreground: AppColors.successGreen,
-                  ),
+                  Text('RICHFIELD GRADUATE NETWORK',
+                      style: AppText.labelBadge(color: AppColors.primary)),
+                  Text('Join the Talent Nexus', style: AppText.headlineLg()),
                 ],
               ),
-              SizedBox(height: AppSpace.sm),
-              Text(
-                'Verify your institutional credentials to connect directly with premier South African corporate recruiters and alumni circles.',
-                style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                padding: EdgeInsets.all(4),
-                border: Border.all(color: Colors.transparent),
-                color: AppColors.surfaceContainerHigh.withOpacity(0.5),
-                child: Row(
-                  children: List.generate(_tabs.length, (i) {
-                    final selected = _tab == i;
-                    return Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() => _tab = i),
-                        child: Container(
-                          padding: EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: selected ? AppColors.surfaceContainerLowest : Colors.transparent,
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                          ),
-                          child: Column(
-                            children: [
-                              Icon(_tabIcons[i],
-                                  size: 18,
-                                  color: selected ? AppColors.primary : AppColors.onSurfaceVariant),
-                              SizedBox(height: 2),
-                              Text(_tabs[i],
-                                  style: AppText.labelMd(
-                                      color: selected ? AppColors.primary : AppColors.onSurfaceVariant)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
+            ),
+            Pill(
+              text: 'ACCREDITED',
+              background: AppColors.successGreenBg,
+              foreground: AppColors.successGreen,
+            ),
+          ],
+        ),
+        SizedBox(height: AppSpace.sm),
+        Text(
+          'Build a portfolio, find internships and graduate roles, and connect with Richfield alumni and recruiters.',
+          style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+        ),
+        SizedBox(height: AppSpace.base),
+        RoundedCard(
+          padding: EdgeInsets.all(4),
+          border: Border.all(color: Colors.transparent),
+          color: AppColors.surfaceContainerHigh.withOpacity(0.5),
+          child: Row(
+            children: List.generate(_tabs.length, (i) {
+              final selected = _tab == i;
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _tab = i;
+                    _errorMessage = null;
                   }),
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.secondaryContainer.withOpacity(0.2),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppColors.secondary,
-                        borderRadius: BorderRadius.circular(AppRadius.md),
-                      ),
-                      child: Icon(Icons.school_outlined, color: Colors.white, size: 18),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: selected ? AppColors.surfaceContainerLowest : Colors.transparent,
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                     ),
-                    SizedBox(width: AppSpace.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('${_tabs[_tab]} Registration', style: AppText.labelLg()),
-                          Text('Instant institutional database match via student email',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Pill(
-                      text: 'ID VERIFIED',
-                      background: AppColors.surfaceContainerLowest,
-                      foreground: AppColors.onSurfaceVariant,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              _labeledField('Full Legal Name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
-                  controller: _fullNameController),
-              SizedBox(height: AppSpace.md),
-              if (_tab != 2) ...[
-                _labeledField('Student Number', '202209148', Icons.badge_outlined),
-                SizedBox(height: AppSpace.md),
-              ],
-                Text(_tab == 2 ? 'Business Work Email' : 'Mandatory Institutional Email',
-                  style: AppText.labelLg()),
-              SizedBox(height: 6),
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.alternate_email, size: 18),
-                  hintText: _tab == 2 ? 'recruiter@company.co.za' : 's.dlamini22',
-                  suffixIcon: Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Pill(
-                      text: _tab == 2 ? 'WORK EMAIL' : '@my.richfield.ac.za',
-                      background: AppColors.surfaceContainerHigh,
-                      foreground: AppColors.onSurfaceVariant,
-                      fontSize: 9,
-                    ),
-                  ),
-                  filled: true,
-                  fillColor: AppColors.surfaceContainerLowest,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                    borderSide: BorderSide(color: AppColors.outlineVariant),
-                  ),
-                ),
-              ),
-              SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(Icons.lock_outline, size: 12, color: AppColors.onSurfaceVariant),
-                  SizedBox(width: 4),
-                  Text('Domain suffix locked to accredited campus portals',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                ],
-              ),
-              SizedBox(height: AppSpace.md),
-              _tab == 2
-                  ? _labeledField('Company Location', 'Sandton, Johannesburg', Icons.location_on_outlined)
-                  : Row(
+                    child: Column(
                       children: [
-                        Expanded(child: _campusDropdown()),
-                        SizedBox(width: AppSpace.sm),
-                        Expanded(child: _labeledField('Expected Year', '2025', Icons.calendar_today_outlined)),
+                        Icon(_tabIcons[i],
+                            size: 18,
+                            color: selected ? AppColors.primary : AppColors.onSurfaceVariant),
+                        SizedBox(height: 2),
+                        Text(_tabs[i],
+                            style: AppText.labelMd(
+                                color: selected ? AppColors.primary : AppColors.onSurfaceVariant)),
                       ],
                     ),
-              SizedBox(height: AppSpace.md),
-              _tab == 2
-                  ? _labeledField('Industry / Talent Focus', 'Software engineering and data', Icons.business_center_outlined)
-                  : _labeledField('Faculty / Programme', 'BSc Information Technology', Icons.school_outlined),
-              SizedBox(height: AppSpace.md),
-              _labeledField('Password', 'At least 8 characters', Icons.lock_outline,
-                  controller: _passwordController, obscureText: true),
-              SizedBox(height: AppSpace.base),
-              CheckboxListTile(
-                value: _agreed,
-                onChanged: (v) => setState(() => _agreed = v ?? false),
-                controlAffinity: ListTileControlAffinity.leading,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text.rich(
-                  TextSpan(
-                    style: AppText.bodySm(),
-                    children: [
-                      TextSpan(text: 'I agree to the '),
-                      TextSpan(
-                        text: 'Richfield Network POPIA Terms',
-                        style: AppText.bodySm(color: AppColors.primary),
-                      ),
-                      TextSpan(
-                          text: ' and consent to cross-matching my identity with institutional registrar databases.'),
-                    ],
                   ),
                 ),
-              ),
-              if (_errorMessage != null) ...[
-                Padding(
-                  padding: EdgeInsets.only(bottom: AppSpace.sm),
-                  child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+              );
+            }),
+          ),
+        ),
+        SizedBox(height: AppSpace.base),
+        // Was "Instant institutional database match via student email" with
+        // an 'ID VERIFIED' pill. No such lookup exists; this says what does
+        // happen for each account type.
+        RoundedCard(
+          color: AppColors.secondaryContainer.withOpacity(0.2),
+          border: Border.all(color: Colors.transparent),
+          child: Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
                 ),
-              ],
-              SizedBox(height: AppSpace.sm),
-              PrimaryButton(
-                label: _submitting ? 'Creating account…' : 'Create Verified ${_tabs[_tab]} Account',
-                icon: Icons.how_to_reg_outlined,
-                onPressed: (_agreed && !_submitting) ? _submit : null,
+                child: Icon(_tabIcons[_tab], color: Colors.white, size: 18),
               ),
-              SizedBox(height: AppSpace.sm),
-              Center(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.lock_outline, size: 12, color: AppColors.successGreen),
-                    SizedBox(width: 4),
-                    Text('Supabase Auth Ready for Backend Integration',
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  ],
-                ),
-              ),
-              SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.tertiaryContainer.withOpacity(0.15),
-                border: Border.all(color: Colors.transparent),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: AppColors.tertiaryFixed,
-                      child: Text('92%', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700)),
-                    ),
-                    SizedBox(width: AppSpace.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Graduate Placement Index', style: AppText.labelMd()),
-                          Text('Class of 2024 placed within 6 months',
-                              style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.trending_up, color: AppColors.successGreen),
+                    Text('${_tabs[_tab]} registration', style: AppText.labelLg()),
+                    Text(_howItWorks, style: muted),
                   ],
                 ),
               ),
             ],
           ),
         ),
-      ),
+        SizedBox(height: AppSpace.base),
+        _labeledField('Full name', 'e.g. Sipho Nhlanhla Dlamini', Icons.person_outline,
+            controller: _fullNameController),
+        SizedBox(height: AppSpace.md),
+        ..._accountTypeFields(),
+        Text(emailLabel, style: AppText.labelLg()),
+        SizedBox(height: 6),
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          autocorrect: false,
+          decoration: InputDecoration(
+            prefixIcon: Icon(Icons.alternate_email, size: 18),
+            hintText: emailHint,
+            filled: true,
+            fillColor: AppColors.surfaceContainerLowest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              borderSide: BorderSide(color: AppColors.outlineVariant),
+            ),
+          ),
+        ),
+        SizedBox(height: 4),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(_tab == 0 ? Icons.lock_outline : Icons.info_outline, size: 12, color: AppColors.onSurfaceVariant),
+            SizedBox(width: 4),
+            Expanded(child: Text(emailNote, style: muted)),
+          ],
+        ),
+        SizedBox(height: AppSpace.md),
+        _labeledField('Password', 'At least 8 characters', Icons.lock_outline,
+            controller: _passwordController, obscureText: true),
+        SizedBox(height: AppSpace.base),
+        // The old text also consented to "cross-matching my identity with
+        // institutional registrar databases", which nothing does.
+        CheckboxListTile(
+          value: _agreed,
+          onChanged: (v) => setState(() => _agreed = v ?? false),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text(_consentText, style: AppText.bodySm()),
+        ),
+        if (_errorMessage != null) ...[
+          Padding(
+            padding: EdgeInsets.only(bottom: AppSpace.sm),
+            child: Text(_errorMessage!, style: AppText.bodySm(color: AppColors.error)),
+          ),
+        ],
+        SizedBox(height: AppSpace.sm),
+        PrimaryButton(
+          label: _submitting ? 'Creating account…' : 'Create ${_tabs[_tab].toLowerCase()} account',
+          icon: Icons.how_to_reg_outlined,
+          onPressed: (_agreed && !_submitting) ? _submit : null,
+        ),
+        SizedBox(height: AppSpace.base),
+      ],
     );
   }
 
+  /// Student and alumni fields become an education row (and, for alumni, the
+  /// verification claim an administrator approves); employer fields become the
+  /// business profile. All of these used to be discarded on submit.
+  List<Widget> _accountTypeFields() {
+    Widget gap() => SizedBox(height: AppSpace.md);
+
+    if (_tab == 2) {
+      return [
+        _labeledField('Company name', 'e.g. Acme Digital (Pty) Ltd', Icons.apartment_outlined,
+            controller: _companyNameController),
+        gap(),
+        _labeledField('Industry (optional)', 'Software engineering and data', Icons.business_center_outlined,
+            controller: _industryController),
+        gap(),
+        _labeledField('Company location (optional)', 'Sandton, Johannesburg', Icons.location_on_outlined,
+            controller: _locationController),
+        gap(),
+      ];
+    }
+
+    final alumni = _tab == 1;
+    return [
+      if (alumni) ...[
+        _labeledField('Student number', 'The number you studied under', Icons.badge_outlined,
+            controller: _studentNumberController),
+        gap(),
+      ],
+      _labeledField(alumni ? 'Programme completed' : 'Programme', 'BSc Information Technology', Icons.school_outlined,
+          controller: _programmeController),
+      gap(),
+      _campusDropdown(),
+      gap(),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', alumni ? '2017' : '2024', Icons.event_outlined,
+                controller: _enrolmentYearController, keyboardType: TextInputType.number),
+          ),
+          SizedBox(width: AppSpace.sm),
+          Expanded(
+            child: _labeledField(alumni ? 'Graduation year' : 'Graduating (optional)', alumni ? '2021' : '2027',
+                Icons.calendar_today_outlined,
+                controller: _graduationYearController, keyboardType: TextInputType.number),
+          ),
+        ],
+      ),
+      gap(),
+    ];
+  }
+
   Widget _labeledField(String label, String hint, IconData icon,
-      {TextEditingController? controller, bool obscureText = false}) {
+      {TextEditingController? controller, bool obscureText = false, TextInputType? keyboardType}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1784,6 +2038,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         TextField(
           controller: controller,
           obscureText: obscureText,
+          keyboardType: keyboardType,
           decoration: InputDecoration(
             prefixIcon: Icon(icon, size: 18),
             hintText: hint,
@@ -1824,78 +2079,117 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ],
     );
   }
-
-  Widget _labeledDropdown(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: AppText.labelLg()),
-        SizedBox(height: 6),
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-            border: Border.all(color: AppColors.outlineVariant),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(value, style: AppText.bodyMd()),
-              Icon(Icons.expand_more, size: 18),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 // =====================================================================
-// SECTION 7 â€” ROOT SHELL (bottom navigation)
+// SECTION 7 — ROOT SHELL (bottom navigation)
 // =====================================================================
 
-class AdminDashboardScreen extends StatelessWidget {
+class AdminDashboardScreen extends StatefulWidget {
   AdminDashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
-      children: [
-        RichfieldHeader(
-          title: 'Admin Analytics',
-          subtitle: 'STAFF TIER 1',
-          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
+}
+
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  final _service = AdminAnalyticsService(Supabase.instance.client);
+  AdminOverview? _overview;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _error = null);
+    try {
+      final overview = await _service.load();
+      if (mounted) setState(() => _overview = overview);
+    } catch (e) {
+      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  String _plural(int n, String word) => '$n $word${n == 1 ? '' : 's'}';
+
+  Widget _stat(int value, String label) => Expanded(
+        child: Column(
+          children: [
+            Text('$value', style: AppText.headlineMd(color: AppColors.primary)),
+            Text(label, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+          ],
         ),
-        _dashboardBanner('Canvas Core: Ready for Deployment', AppColors.successGreen),
-        SizedBox(height: AppSpace.base),
-        SectionHeader(title: 'Operational Tickers'),
-        _metricGrid([
-          ['12', 'Alumni Queue', Icons.shield_outlined],
-          ['4', 'Biz Approvals', Icons.business_center_outlined],
-          ['1', 'Moderation', Icons.flag_outlined],
-          ['3,420', 'Students', Icons.groups_outlined],
-        ]),
-        SizedBox(height: AppSpace.base),
-        SectionHeader(title: 'Platform Growth & Ingestion'),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Platform Growth', style: AppText.headlineSm()),
-          Text('Live operational analytics for institutional oversight', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-          SizedBox(height: AppSpace.md),
-          SizedBox(height: 110, child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [18, 34, 52, 70, 86, 100].map((value) => Expanded(child: Padding(padding: EdgeInsets.symmetric(horizontal: 3), child: Container(height: value.toDouble(), color: value == 100 ? AppColors.primary : AppColors.secondary)))).toList())),
-          SizedBox(height: AppSpace.md),
-          Text('Integration Hookpoints', style: AppText.labelLg()),
-          _hookRow(context, Icons.manage_accounts_outlined, 'User Management Hook', 'Approve, suspend, and verify accounts'),
-          _hookRow(context, Icons.flag_outlined, 'Moderation Pipeline', 'Review flagged feed content'),
-          _hookRow(context, Icons.event_outlined, 'Events Dispatcher', 'Career fairs and hackathons'),
-          _hookRow(context, Icons.business_center_outlined, 'Business Oversight', 'Recruiter and job approvals'),
-        ])),
-        SizedBox(height: AppSpace.base),
-        SectionHeader(title: 'Pending Oversight Requests'),
-        _oversightRow(context, 'Vodacom Enterprise Dev', 'Junior Cloud Architect', 'Authorize'),
-        _oversightRow(context, 'Student Post Flagged', 'Off-topic commercial solicitation', 'Remove Post'),
-      ],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final o = _overview;
+    final pendingBusinesses = o?.businessesByStatus['pending'] ?? 0;
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
+        children: [
+          RichfieldHeader(
+            title: 'Admin Overview',
+            subtitle: 'RICHFIELD STAFF',
+            onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
+          ),
+          if (_error != null) ...[
+            Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+            TextButton(onPressed: _load, child: Text('Try again')),
+          ] else if (o == null)
+            Padding(
+              padding: EdgeInsets.all(AppSpace.xl),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else ...[
+            SectionHeader(title: 'Members'),
+            _metricGrid([
+              ['${o.usersByRole['student'] ?? 0}', 'Students', Icons.school_outlined],
+              ['${o.usersByRole['alumni'] ?? 0}', 'Alumni', Icons.workspace_premium_outlined],
+              ['${o.usersByRole['business'] ?? 0}', 'Businesses', Icons.business_center_outlined],
+              ['${o.monthlyActiveUsers}', 'Active this month', Icons.insights_outlined],
+            ]),
+            SizedBox(height: AppSpace.base),
+            SectionHeader(title: 'Needs attention'),
+            _checkRow('Business accounts awaiting approval', '$pendingBusinesses pending',
+                done: pendingBusinesses == 0),
+            _checkRow('Alumni verification claims', '${o.pendingAlumniClaims} pending',
+                done: o.pendingAlumniClaims == 0),
+            _checkRow('Flagged content', _plural(o.flaggedContent, 'report'), done: o.flaggedContent == 0),
+            SizedBox(height: AppSpace.base),
+            SectionHeader(title: 'Content'),
+            RoundedCard(
+              child: Row(
+                children: [
+                  _stat(o.posts, 'Posts'),
+                  _stat(o.videos, 'Videos'),
+                  _stat(o.opportunities, 'Opportunities'),
+                ],
+              ),
+            ),
+            SizedBox(height: AppSpace.base),
+            RoundedCard(
+              child: Row(
+                children: [
+                  Icon(Icons.desktop_windows_outlined, color: AppColors.secondary),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Text(
+                      'Approvals, moderation and announcements are handled in the Richfield Connect web admin console.',
+                      style: AppText.bodyMd(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1917,6 +2211,8 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
   List<MapEntry<String, int>> _topSkills = [];
   List<Map<String, dynamic>> _engagement = [];
   String _companyName = '';
+  bool _companyComplete = false;
+  bool _approved = false;
 
   @override
   void initState() {
@@ -1935,14 +2231,25 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
       final engagement = await _analytics.fetchListingEngagement();
 
       var companyName = '';
+      var companyComplete = false;
+      var approved = false;
       final businessId = _authService.currentUser?.id;
       if (businessId != null) {
-        final bp = await Supabase.instance.client
-            .from('business_profiles')
-            .select('company_name')
-            .eq('profile_id', businessId)
-            .maybeSingle();
+        final client = Supabase.instance.client;
+        final rows = await Future.wait<dynamic>([
+          client
+              .from('business_profiles')
+              .select('company_name, industry, location, description')
+              .eq('profile_id', businessId)
+              .maybeSingle(),
+          client.from('profiles').select('account_status').eq('id', businessId).maybeSingle(),
+        ]);
+        final bp = rows[0] as Map<String, dynamic>?;
+        final profile = rows[1] as Map<String, dynamic>?;
         companyName = (bp?['company_name'] as String?) ?? '';
+        companyComplete = ['company_name', 'industry', 'location', 'description']
+            .every((key) => ((bp?[key] as String?) ?? '').trim().isNotEmpty);
+        approved = profile?['account_status'] == 'active';
       }
 
       final total = pipeline.fold<int>(
@@ -1961,6 +2268,8 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
         _topSkills = topSkills.take(3).toList();
         _engagement = engagement;
         _companyName = companyName;
+        _companyComplete = companyComplete;
+        _approved = approved;
         _loading = false;
       });
     } catch (e) {
@@ -1993,18 +2302,26 @@ class _BusinessDashboardScreenState extends State<BusinessDashboardScreen> {
           },
         ),
         SizedBox(height: AppSpace.base),
-        _dashboardBanner(
-            _companyName.isEmpty ? 'Verified Partner' : '$_companyName • Verified Partner',
-            AppColors.secondary),
-        SizedBox(height: AppSpace.base),
-        SectionHeader(title: 'Company Verification'),
-        // Left as-is deliberately: business_profiles has no CIPC/MoA
-        // verification columns in the schema, so there's nothing real to
-        // swap these two rows for yet.
-        _checkRow('CIPC Registration Verified', _companyName.isEmpty ? 'On file' : _companyName),
-        _checkRow('Work Email Domain Verified', '@discovery.co.za'),
-        _checkRow('Richfield Academic MoA', 'In review'),
-        SizedBox(height: AppSpace.base),
+        if (!_loading && _error == null) ...[
+          _dashboardBanner(
+              _approved
+                  ? (_companyName.isEmpty ? 'Approved partner' : '$_companyName • Approved partner')
+                  : 'Awaiting Richfield approval',
+              _approved ? AppColors.secondary : AppColors.tertiary),
+          SizedBox(height: AppSpace.base),
+          SectionHeader(title: 'Account Status'),
+          // These were three hardcoded ticks: 'CIPC Registration Verified',
+          // 'Work Email Domain Verified' showing the literal '@discovery.co.za'
+          // on every business account, and an MoA 'In review'. Nothing in the
+          // schema records any of those, so the rows show what it does record.
+          _checkRow('Approved by a Richfield administrator',
+              _approved ? 'Account active' : 'Waiting for an administrator to review your account',
+              done: _approved),
+          _checkRow('Company profile',
+              _companyComplete ? 'Name, industry, location and description on file' : 'Industry, location or description missing',
+              done: _companyComplete),
+          SizedBox(height: AppSpace.base),
+        ],
         SectionHeader(title: 'Talent Analytics'),
         if (_loading)
           Padding(
@@ -2084,38 +2401,15 @@ Widget _metricGrid(List<List<Object>> metrics) => GridView.count(
       children: metrics.map((metric) => RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(metric[2] as IconData, color: AppColors.secondary), Spacer(), Text(metric[0] as String, style: AppText.headlineMd()), Text(metric[1] as String, style: AppText.labelMd(color: AppColors.onSurfaceVariant))]))).toList(),
     );
 
-Widget _hookRow(BuildContext context, IconData icon, String title, String detail) => Padding(
-      padding: EdgeInsets.only(top: AppSpace.sm),
-      child: Row(children: [Icon(icon, color: AppColors.secondary), SizedBox(width: AppSpace.sm), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: AppText.labelMd()), Text(detail, style: AppText.bodySm(color: AppColors.onSurfaceVariant))])), OutlinedButton(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$title attached'), duration: Duration(seconds: 1))), child: Text('Attach'))]),
-    );
-
-Widget _oversightRow(BuildContext context, String title, String detail, String action) => Padding(
+/// A status line with a real state behind it: a green check when [done], a
+/// pending icon when not. The old version chose its icon by looking for the
+/// substring 'MoA' in the title, on rows whose "verified" state was invented.
+Widget _checkRow(String title, String detail, {required bool done}) => Padding(
       padding: EdgeInsets.only(bottom: AppSpace.sm),
-      child: RoundedCard(child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: AppText.labelLg()), Text(detail, style: AppText.bodySm(color: AppColors.onSurfaceVariant))])), ElevatedButton(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$action completed'), duration: Duration(seconds: 1))), child: Text(action))])),
-    );
-
-Widget _checkRow(String title, String detail) => Padding(
-      padding: EdgeInsets.only(bottom: AppSpace.sm),
-      child: RoundedCard(child: Row(children: [Icon(title.contains('MoA') ? Icons.pending_outlined : Icons.check_circle, color: title.contains('MoA') ? AppColors.tertiary : AppColors.successGreen), SizedBox(width: AppSpace.sm), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: AppText.labelMd()), Text(detail, style: AppText.bodySm(color: AppColors.onSurfaceVariant))]))])),
+      child: RoundedCard(child: Row(children: [Icon(done ? Icons.check_circle : Icons.pending_outlined, color: done ? AppColors.successGreen : AppColors.tertiary), SizedBox(width: AppSpace.sm), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: AppText.labelMd()), Text(detail, style: AppText.bodySm(color: AppColors.onSurfaceVariant))]))])),
     );
 
 Widget _skillBar(String label, double value) => Padding(padding: EdgeInsets.only(top: AppSpace.sm), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(label, style: AppText.bodySm()), Text('${(value * 100).round()}%', style: AppText.labelMd())]), SizedBox(height: 4), LinearProgressIndicator(value: value, color: AppColors.secondary, backgroundColor: AppColors.surfaceContainerHigh)]));
-
-class _EngagementPainter extends CustomPainter {
-  final Color color;
-  _EngagementPainter(this.color);
-  @override
-  void paint(Canvas canvas, Size size) {
-    final path = Path();
-    for (var i = 0; i < 7; i++) {
-      final point = Offset(size.width * i / 6, size.height * (i.isEven ? .75 : .2));
-      if (i == 0) path.moveTo(point.dx, point.dy); else path.lineTo(point.dx, point.dy);
-    }
-    canvas.drawPath(path, Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 2);
-  }
-  @override
-  bool shouldRepaint(covariant _EngagementPainter oldDelegate) => oldDelegate.color != color;
-}
 
 class PostOpportunityScreen extends StatefulWidget {
   PostOpportunityScreen({super.key});
@@ -2290,9 +2584,27 @@ class ApplicantsScreen extends StatefulWidget {
 
 class _ApplicantsScreenState extends State<ApplicantsScreen> {
   final _jobsService = JobsService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _applicants = [];
+
+  /// cvs is private; the 039 storage policy lets this business sign a URL
+  /// only for a CV attached to an application on its own listing.
+  Future<void> _openCv(String path) async {
+    try {
+      final url = await _mediaService.cvSignedUrl(path);
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No app on this device could open the PDF.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
 
   @override
   void initState() {
@@ -2356,26 +2668,47 @@ class _ApplicantsScreenState extends State<ApplicantsScreen> {
     final initials = (first.isNotEmpty ? first[0] : '') + (last.isNotEmpty ? last[0] : '');
     final status = row['status'] as String? ?? 'submitted';
     final appliedAt = DateTime.tryParse(row['applied_at'] as String? ?? '');
+    final cvPath = (row['cv_path'] as String?)?.trim();
+    final hasCv = cvPath != null && cvPath.isNotEmpty;
 
     return RoundedCard(
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
-          SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
-                if (headline != null && headline.isNotEmpty)
-                  Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                if (appliedAt != null)
-                  Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              ],
-            ),
+          Row(
+            children: [
+              InitialsAvatar(initials: initials.isEmpty ? '?' : initials.toUpperCase()),
+              SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name.isEmpty ? 'Unnamed applicant' : name, style: AppText.labelLg()),
+                    if (headline != null && headline.isNotEmpty)
+                      Text(headline, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                    if (appliedAt != null)
+                      Text('Applied ${appliedAt.day}/${appliedAt.month}/${appliedAt.year}',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              _statusPill(status),
+            ],
           ),
-          _statusPill(status),
+          SizedBox(height: AppSpace.sm),
+          // The CV submitted with this application (migration 039), or an
+          // honest note — never a button that opens nothing.
+          hasCv
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _openCv(cvPath),
+                    icon: Icon(Icons.picture_as_pdf_outlined, size: 16),
+                    label: Text('View CV'),
+                  ),
+                )
+              : Text('No CV attached to this application.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
         ],
       ),
     );
@@ -2452,14 +2785,157 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _index = 0;
 
+  static const _networkTab = 2;
+
+  // Rubric Section 6, item 4: "First-time users receive an interactive
+  // app tutorial." Before this, OnboardingTourOverlay only ever launched
+  // manually from the account menu ("Take the Onboarding Tour") — nothing
+  // triggered it automatically, so a first-time user who never opened
+  // that menu would never see it at all.
+  static const _tourSeenKey = 'richfield_onboarding_tour_seen';
+
+  StreamSubscription<Map<String, dynamic>>? _alertSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // One realtime (WebSocket) channel for the signed-in user, shared by the
+    // Messages badge, the bell, open chats and the Network screen — see
+    // services/realtime_hub.dart. Released when go_router swaps the shell
+    // for the login screen on sign-out.
+    RealtimeHub.instance.retain();
+    _alertSubscription = RealtimeHub.instance.notifications.listen(_showInAppAlert);
+
+    // addPostFrameCallback, not a direct call here: _startOnboardingTour
+    // does Navigator.of(context).push(...), and calling that before this
+    // widget's first frame has actually built is exactly the kind of
+    // "Navigator operation requested with a context that does not
+    // include a Navigator" crash this avoids.
+    // Welcome ("your email is confirmed") first when one is due, then the
+    // first-run tour — two dialogs at once would fight for the screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await EmailConfirmation.showWelcomeIfDue(context, awaitingApproval: false);
+      if (mounted) _maybeShowTour();
+      // A QR Connect link that cold-started the app (or arrived while the
+      // member was still signing in) is waiting by now.
+      if (mounted) _openPendingMemberLink();
+    });
+    MemberLink.pendingProfileId.addListener(_openPendingMemberLink);
+  }
+
+  @override
+  void dispose() {
+    MemberLink.pendingProfileId.removeListener(_openPendingMemberLink);
+    _alertSubscription?.cancel();
+    RealtimeHub.instance.release();
+    super.dispose();
+  }
+
+  /// richfield://member/<uid>: open that profile over the shell, the same
+  /// push the Network and chat screens use. Taking the id first means a
+  /// second scan of the same code opens it again.
+  void _openPendingMemberLink() {
+    final profileId = MemberLink.consumePending();
+    if (profileId == null || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => MemberProfileScreen(profileId: profileId)),
+    );
+  }
+
+  Future<void> _maybeShowTour() async {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadySeen = prefs.getBool(_tourSeenKey) ?? false;
+    if (alreadySeen || !mounted) return;
+
+    // Set the flag before showing, not after dismissal — the manual
+    // "Take the Onboarding Tour" menu item is still there as a permanent
+    // fallback, so the cost of marking it seen a touch early is low, and
+    // it means repeatedly relaunching the app mid-testing (Keshav's
+    // actual workflow tonight) doesn't re-trigger it on every restart.
+    await prefs.setBool(_tourSeenKey, true);
+    if (!mounted) return;
+    await _startOnboardingTour(context);
+
+    // Rubric 6.1: the tour explains the app, then Career AI walks a new
+    // student or alumnus through actually filling in their profile, one
+    // missing section at a time. Offered rather than forced — "Later" leaves
+    // it on the Portfolio sparkle button and in the account menu.
+    final hasCareerProfile =
+        widget.role == RichfieldRole.student || widget.role == RichfieldRole.alumni;
+    if (!hasCareerProfile || !mounted) return;
+    final start = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.auto_awesome, color: AppColors.primary),
+        title: Text('Set up your profile with AI?'),
+        content: Text(
+          'Richfield Career AI looks at what your profile is missing and walks you through it step by step.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text('Start'),
+          ),
+        ],
+      ),
+    );
+    if (start == true && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => AiAssistantScreen(guided: true)),
+      );
+    }
+  }
+
+  /// In-app alert for anything that arrives while the app is open
+  /// (guidelines 2.8). Skipped for a message from the person whose chat is
+  /// already on screen — the message appearing there is the alert.
+  void _showInAppAlert(Map<String, dynamic> row) {
+    if (!mounted) return;
+    final notification = AppNotification.fromRow(row);
+    if (notification.type == 'new_message' &&
+        notification.payload['sender_id'] == RealtimeHub.instance.activeChatPartnerId) {
+      return;
+    }
+    final text = notification.body.isEmpty
+        ? notification.title
+        : '${notification.title} — ${notification.body}';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 4),
+        content: Row(
+          children: [
+            Icon(notificationIcon(notification.type), size: 18, color: AppColors.inverseOnSurface),
+            SizedBox(width: AppSpace.sm),
+            Expanded(child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis)),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => openNotificationTarget(context, notification),
+        ),
+      ));
+  }
+
+  void _openMenu() => _openAccountMenu(context, widget.authService);
+
   List<Widget> get _screens => [
         widget.role == RichfieldRole.admin
-          ? AdminHubScreen()
+            ? AdminHubScreen()
             : widget.role == RichfieldRole.corporate
-            ? BusinessHubScreen()
+                ? BusinessHubScreen()
                 : FeedScreen(),
         JobsScreen(),
-        NetworkScreen(),
+        NetworkScreen(onAvatarTap: _openMenu),
+        MessagesScreen(
+          onAvatarTap: _openMenu,
+          onFindPeople: () => setState(() => _index = _networkTab),
+        ),
         PortfolioScreen(authService: widget.authService),
       ];
 
@@ -2467,27 +2943,38 @@ class _RootShellState extends State<RootShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(child: IndexedStack(index: _index, children: _screens)),
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _index,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.onSurfaceVariant,
-        selectedLabelStyle: AppText.labelMd(color: AppColors.primary),
-        unselectedLabelStyle: AppText.labelMd(color: AppColors.onSurfaceVariant),
-        onTap: (i) => setState(() => _index = i),
-        items: [
-          BottomNavigationBarItem(icon: Icon(Icons.dynamic_feed_outlined), label: 'Feed'),
-          BottomNavigationBarItem(icon: Icon(Icons.work_outline), label: 'Jobs'),
-          BottomNavigationBarItem(icon: Icon(Icons.hub_outlined), label: 'Network'),
-          BottomNavigationBarItem(icon: Icon(Icons.badge_outlined), label: 'Portfolio'),
-        ],
+      bottomNavigationBar: ValueListenableBuilder<int>(
+        valueListenable: RealtimeHub.instance.unreadMessages,
+        builder: (context, unread, _) => BottomNavigationBar(
+          type: BottomNavigationBarType.fixed,
+          currentIndex: _index,
+          selectedItemColor: AppColors.primary,
+          unselectedItemColor: AppColors.onSurfaceVariant,
+          selectedLabelStyle: AppText.labelMd(color: AppColors.primary),
+          unselectedLabelStyle: AppText.labelMd(color: AppColors.onSurfaceVariant),
+          onTap: (i) => setState(() => _index = i),
+          items: [
+            BottomNavigationBarItem(icon: Icon(Icons.dynamic_feed_outlined), label: 'Feed'),
+            BottomNavigationBarItem(icon: Icon(Icons.work_outline), label: 'Jobs'),
+            BottomNavigationBarItem(icon: Icon(Icons.hub_outlined), label: 'Network'),
+            BottomNavigationBarItem(
+              icon: Badge(
+                isLabelVisible: unread > 0,
+                label: Text(unread > 99 ? '99+' : '$unread'),
+                child: Icon(Icons.chat_bubble_outline),
+              ),
+              label: 'Messages',
+            ),
+            BottomNavigationBarItem(icon: Icon(Icons.badge_outlined), label: 'Portfolio'),
+          ],
+        ),
       ),
     );
   }
 }
 
 // =====================================================================
-// SECTION 8 â€” FEED SCREEN
+// SECTION 8 — FEED SCREEN
 // =====================================================================
 
 class FeedScreen extends StatefulWidget {
@@ -2500,19 +2987,55 @@ class FeedScreen extends StatefulWidget {
 class _FeedScreenState extends State<FeedScreen> {
   int _filter = 0;
   final Set<String> _dismissedPosts = <String>{};
-  bool _showPinnedBanner = true;
-  static const _filters = ['All Updates', 'Career Reels', 'Graduate Jobs'];
+
+  /// Applied to the loaded posts by _visiblePosts. None of the chips used to
+  /// filter anything, and the third was 'Graduate Jobs' in a list of posts.
+  /// 'Newest first' switches the role ranking off (plain chronological).
+  static const _filters = ['For you', 'Career reels', 'Photos', 'Newest first'];
+  static const _newestFilter = 3;
+
+  /// profiles.role of the signed-in member; drives FeedRanker.
+  String _viewerRole = '';
+
+  /// The same posts in plain created_at order, for the 'Newest first' chip.
+  List<FeedPost> _postsNewest = [];
+
+  /// Upcoming published events, soonest first. The banner shows the first
+  /// and links to the rest; an empty list hides it.
+  List<Map<String, dynamic>> _upcomingEvents = [];
+  bool _eventDismissed = false;
 
   final _authService = AuthService(Supabase.instance.client);
   final _feedService = FeedService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   bool _loadingPosts = true;
   String? _postsError;
   List<FeedPost> _posts = [];
+
+  /// Post ids this user has already reposted, loaded alongside the feed so
+  /// the Repost button paints in the right state on first frame instead of
+  /// defaulting to off and flipping a moment later.
+  Set<String> _repostedIds = <String>{};
+
+  /// Post ids this user has liked, loaded the same way.
+  Set<String> _reactedIds = <String>{};
 
   @override
   void initState() {
     super.initState();
     _loadPosts();
+    _loadEvents();
+  }
+
+  /// The banner is optional: if this fails the feed shows no banner rather
+  /// than an error above posts that loaded fine.
+  Future<void> _loadEvents() async {
+    try {
+      final events = await _feedService.fetchUpcomingEvents();
+      if (mounted) setState(() => _upcomingEvents = events);
+    } catch (_) {
+      if (mounted) setState(() => _upcomingEvents = []);
+    }
   }
 
   Future<void> _loadPosts() async {
@@ -2521,10 +3044,78 @@ class _FeedScreenState extends State<FeedScreen> {
       _postsError = null;
     });
     try {
-      final rows = await _feedService.fetchRecentPosts();
+      final userId = _authService.currentUser?.id;
+
+      // One round trip each, in parallel — the repost set is not worth a
+      // second sequential wait before the feed can paint.
+      final results = await Future.wait<Object>([
+        _feedService.fetchRecentPosts(),
+        if (userId != null) _feedService.fetchMyRepostedPostIds(userId),
+        if (userId != null) _feedService.fetchMyReactedPostIds(userId),
+        if (userId != null) _feedService.fetchConnectedMemberIds(userId),
+        if (userId != null) _authService.fetchOwnProfile(),
+      ]);
+
+      final rows = results[0] as List<Map<String, dynamic>>;
+      final reposted =
+          results.length > 1 ? results[1] as Set<String> : <String>{};
+      final reacted =
+          results.length > 2 ? results[2] as Set<String> : <String>{};
+      final connections =
+          results.length > 3 ? results[3] as Set<String> : <String>{};
+      final viewerRole = results.length > 4
+          ? ((results[4] as Map<String, dynamic>)['role'] as String? ?? '')
+          : '';
+
+      final newest = rows
+          .map((row) => _feedPostFromRow(
+                row,
+                repostedIds: reposted,
+                reactedIds: reacted,
+                mediaService: _mediaService,
+              ))
+          .toList();
+
+      // Guidelines 2.4: ranked by relevance to the viewer's role and
+      // engagement history, so the same posts read differently to a
+      // student, an alumnus and a recruiter. See services/feed_ranker.dart.
+      final engagedAuthors = <String>{
+        for (final p in newest)
+          if (p.id != null && p.authorId != null && (reacted.contains(p.id) || reposted.contains(p.id)))
+            p.authorId!,
+      };
+      final rankedIds = FeedRanker.rankIds(
+        [
+          for (final p in newest)
+            if (p.id != null)
+              RankableFeedPost(
+                id: p.id!,
+                authorId: p.authorId,
+                authorRole: p.authorRoleKey,
+                createdAt: p.createdAt,
+                isVideo: p.type == FeedPostType.video,
+                hasImage: p.imageUrl != null,
+                reactions: p.reactionCountA,
+                comments: p.reactionCountB,
+                reposts: p.reactionCountC,
+                viewerReacted: p.isReacted,
+                viewerReposted: p.isReposted,
+              ),
+        ],
+        viewerRole: viewerRole,
+        connectionIds: connections,
+        engagedAuthorIds: engagedAuthors,
+      );
+      final byId = {for (final p in newest) if (p.id != null) p.id!: p};
+      final ranked = [for (final id in rankedIds) byId[id]!];
+
       if (!mounted) return;
       setState(() {
-        _posts = rows.map(_feedPostFromRow).toList();
+        _repostedIds = reposted;
+        _reactedIds = reacted;
+        _viewerRole = viewerRole;
+        _postsNewest = newest;
+        _posts = ranked;
         _loadingPosts = false;
       });
     } catch (e) {
@@ -2536,12 +3127,129 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
+  /// Optimistic toggle: flip the card immediately, then reconcile with the
+  /// server. On failure we put the previous state back rather than leaving
+  /// the UI showing a repost that does not exist in the database.
+  Future<void> _toggleRepost(FeedPost post) async {
+    final postId = post.id;
+    final userId = _authService.currentUser?.id;
+    if (postId == null || userId == null) return;
+
+    final wasReposted = post.isReposted;
+
+    void apply(bool reposted) {
+      setState(() {
+        if (reposted) {
+          _repostedIds.add(postId);
+        } else {
+          _repostedIds.remove(postId);
+        }
+        _posts = _posts
+            .map((p) => p.id == postId
+                ? p.copyWith(
+                    isReposted: reposted,
+                    reactionCountC:
+                        (p.reactionCountC + (reposted ? 1 : -1)).clamp(0, 1 << 30),
+                  )
+                : p)
+            .toList();
+      });
+    }
+
+    apply(!wasReposted);
+
+    try {
+      await _feedService.toggleRepost(
+        postId: postId,
+        userId: userId,
+        currentlyReposted: wasReposted,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      apply(wasReposted); // roll back
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AuthErrorMapper.fromAny(e))),
+      );
+    }
+  }
+
+  /// Same optimistic pattern as reposts. reactions allows one row per member
+  /// per post, so a double tap can't count twice.
+  Future<void> _toggleReaction(FeedPost post) async {
+    final postId = post.id;
+    final userId = _authService.currentUser?.id;
+    if (postId == null || userId == null) return;
+
+    final wasReacted = post.isReacted;
+
+    void apply(bool reacted) {
+      setState(() {
+        if (reacted) {
+          _reactedIds.add(postId);
+        } else {
+          _reactedIds.remove(postId);
+        }
+        _posts = _posts
+            .map((p) => p.id == postId
+                ? p.copyWith(
+                    isReacted: reacted,
+                    reactionCountA: (p.reactionCountA + (reacted ? 1 : -1)).clamp(0, 1 << 30),
+                  )
+                : p)
+            .toList();
+      });
+    }
+
+    apply(!wasReacted);
+
+    try {
+      await _feedService.toggleReaction(postId: postId, userId: userId, currentlyReacted: wasReacted);
+    } catch (e) {
+      if (!mounted) return;
+      apply(wasReacted);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AuthErrorMapper.fromAny(e))),
+      );
+    }
+  }
+
+  void _openComments(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showCommentsSheet(
+      context,
+      postId: postId,
+      onCountChanged: (count) {
+        if (!mounted) return;
+        setState(() {
+          _posts = _posts.map((p) => p.id == postId ? p.copyWith(reactionCountB: count) : p).toList();
+        });
+      },
+    );
+  }
+
+  void _reportPost(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showReportContentDialog(
+      context,
+      contentType: post.type == FeedPostType.video ? 'video' : 'post',
+      contentId: postId,
+    );
+  }
+
+  Future<void> _deletePost(FeedPost post) async {
+    if (!await _confirmAndDeletePost(context, post)) return;
+    if (!mounted) return;
+    setState(() => _posts = _posts.where((p) => p.id != post.id).toList());
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         RefreshIndicator(
-          onRefresh: _loadPosts,
+          onRefresh: () => Future.wait([_loadPosts(), _loadEvents()]),
           child: ListView(
           padding: EdgeInsets.only(bottom: 90),
           children: [
@@ -2550,17 +3258,24 @@ class _FeedScreenState extends State<FeedScreen> {
               subtitle: 'RICHFIELD VERIFIED',
               onAvatarTap: () => _openAccountMenu(context, _authService),
             ),
-            _spotlightStories(),
-            if (_showPinnedBanner)
+            if (_upcomingEvents.isNotEmpty && !_eventDismissed)
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-                child: _pinnedEventBanner(context),
+                child: _eventBanner(_upcomingEvents.first, total: _upcomingEvents.length),
               ),
             SizedBox(height: AppSpace.base),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
               child: SectionHeader(title: 'Network Activity', trailing: null),
             ),
+            if (!_loadingPosts && _viewerRole.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+                child: Text(
+                  _filter == _newestFilter ? 'Newest first.' : FeedRanker.explain(_viewerRole),
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
+              ),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
               child: SizedBox(
@@ -2576,7 +3291,7 @@ class _FeedScreenState extends State<FeedScreen> {
                       selected: selected,
                       onSelected: (_) => setState(() => _filter = i),
                       labelStyle: AppText.labelMd(
-                          color: selected ? Colors.white : AppColors.onSurfaceVariant),
+                          color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant),
                       selectedColor: AppColors.primary,
                       backgroundColor: AppColors.surfaceContainerLowest,
                       shape: RoundedRectangleBorder(
@@ -2600,19 +3315,48 @@ class _FeedScreenState extends State<FeedScreen> {
                 padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
                 child: Text(_postsError!, style: AppText.bodySm(color: AppColors.error)),
               ),
-            if (!_loadingPosts && _postsError == null && _posts.isEmpty)
+            if (!_loadingPosts && _postsError == null && _visiblePosts.isEmpty)
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-                child: Text('No posts yet.', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                child: Text(
+                  switch (_filter) {
+                    1 => 'No career reels yet.',
+                    2 => 'No photo posts yet.',
+                    _ => 'No posts yet.',
+                  },
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
               ),
             if (!_loadingPosts && _postsError == null)
-              ..._posts.where((post) => !_dismissedPosts.contains(post.authorName)).map(
+              ..._visiblePosts.map(
                 (post) => Padding(
                   padding: EdgeInsets.fromLTRB(
                       AppSpace.base, 0, AppSpace.base, AppSpace.base),
                   child: post.type == FeedPostType.text
-                      ? _TextPostCard(post: post)
-                      : _VideoPostCard(post: post),
+                      ? _TextPostCard(
+                          post: post,
+                          onRepost: post.id == null ? null : () => _toggleRepost(post),
+                          onReact: post.id == null ? null : () => _toggleReaction(post),
+                          onComment: post.id == null ? null : () => _openComments(post),
+                          onReport: post.id == null || post.authorId == _authService.currentUser?.id
+                              ? null
+                              : () => _reportPost(post),
+                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                              ? () => _deletePost(post)
+                              : null,
+                        )
+                      : _VideoPostCard(
+                          post: post,
+                          onRepost: post.id == null ? null : () => _toggleRepost(post),
+                          onReact: post.id == null ? null : () => _toggleReaction(post),
+                          onComment: post.id == null ? null : () => _openComments(post),
+                          onReport: post.id == null || post.authorId == _authService.currentUser?.id
+                              ? null
+                              : () => _reportPost(post),
+                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                              ? () => _deletePost(post)
+                              : null,
+                        ),
                 ),
               ),
           ],
@@ -2630,7 +3374,7 @@ class _FeedScreenState extends State<FeedScreen> {
             },
             backgroundColor: AppColors.primary,
             icon: Icon(Icons.add),
-            label: Text('New Post / Video', style: AppText.labelLg(color: Colors.white)),
+            label: Text('New Post / Video', style: AppText.labelLg(color: AppColors.onPrimary)),
           ),
         ),
       ],
@@ -2641,85 +3385,24 @@ class _FeedScreenState extends State<FeedScreen> {
     setState(() => _dismissedPosts.add(post.authorName));
   }
 
-  Widget _spotlightStories() {
-    final stories = ['Lerato M.', 'Dev Hackathonâ€¦', 'Standard Bank Gradâ€¦'];
-    return SizedBox(
-      height: 96,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-        children: [
-          _storyBubble(
-            child: Icon(Icons.add, color: AppColors.primary),
-            label: 'Add Your\nCareer Reel',
-            border: true,
-          ),
-          ...stories.map((s) => _storyBubble(
-                child: Text(s.substring(0, 1), style: AppText.headlineSm(color: Colors.white)),
-                label: s,
-                live: s == stories.first,
-                filled: true,
-              )),
-        ],
-      ),
-    );
-  }
+  List<FeedPost> get _visiblePosts =>
+      (_filter == _newestFilter ? _postsNewest : _posts).where((post) {
+        if (_dismissedPosts.contains(post.authorName)) return false;
+        return switch (_filter) {
+          1 => post.type == FeedPostType.video,
+          2 => post.imageUrl != null,
+          _ => true,
+        };
+      }).toList();
 
-  Widget _storyBubble({
-    required Widget child,
-    required String label,
-    bool border = false,
-    bool filled = false,
-    bool live = false,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(right: AppSpace.sm),
-      child: SizedBox(
-        width: 68,
-        child: Column(
-          children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: filled ? AppColors.secondaryContainer : AppColors.surfaceContainerLowest,
-                    border: border ? Border.all(color: AppColors.primary, width: 1.5) : null,
-                  ),
-                  child: child,
-                ),
-                if (live)
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: Pill(
-                      text: 'LIVE',
-                      background: AppColors.primary,
-                      foreground: Colors.white,
-                      fontSize: 8,
-                    ),
-                  ),
-              ],
-            ),
-            SizedBox(height: 4),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _pinnedEventBanner(BuildContext context) {
+  /// The soonest upcoming published event, linking to all [total] of them.
+  /// This used to be a hardcoded "Richfield Annual Career Fair 2025, 18 - 20
+  /// October 2025" with an RSVP button wired to () {}, under a row of
+  /// "stories" from people who don't exist, one of them marked LIVE.
+  Widget _eventBanner(Map<String, dynamic> event, {required int total}) {
+    final date = DateTime.tryParse(event['event_date'] as String? ?? '')?.toLocal();
+    final location = (event['location'] as String?)?.trim() ?? '';
+    final description = (event['description'] as String?)?.trim() ?? '';
     return Container(
       padding: EdgeInsets.all(AppSpace.base),
       decoration: BoxDecoration(
@@ -2729,65 +3412,83 @@ class _FeedScreenState extends State<FeedScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: AppSpace.xs,
+          Row(
             children: [
               Pill(
-                text: 'CAREER SERVICES PINNED',
+                text: 'UPCOMING EVENT',
                 background: AppColors.tertiaryFixed,
                 foreground: AppColors.onTertiaryContainer,
-                icon: Icons.push_pin_outlined,
+                icon: Icons.event_outlined,
               ),
+              Spacer(),
               IconButton(
-                tooltip: 'Dismiss announcement',
-                onPressed: () => setState(() => _showPinnedBanner = false),
+                tooltip: 'Hide event',
+                onPressed: () => setState(() => _eventDismissed = true),
                 icon: Icon(Icons.close, color: Colors.white70, size: 18),
               ),
             ],
           ),
-          SizedBox(height: AppSpace.sm),
-          Text('Richfield Annual Career Fair 2025',
-              style: AppText.headlineSm(color: Colors.white)),
-          SizedBox(height: 4),
-          Text(
-            'Over 45 corporate tech partners (AWS, Discovery, Standard Bank, Vodacom) recruiting on-site. Ensure your digital portfolio transcript is synced & verified.',
-            style: AppText.bodySm(color: Colors.white.withOpacity(0.85)),
-          ),
-          SizedBox(height: AppSpace.md),
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            runSpacing: AppSpace.sm,
-            children: [
-              Icon(Icons.calendar_today_outlined, size: 14, color: Colors.white70),
-              SizedBox(width: 4),
-              SizedBox(
-                width: 132,
-                child: Text('18 - 20 October 2025', style: AppText.bodySm(color: Colors.white70)),
+          Text(event['title'] as String? ?? '', style: AppText.headlineSm(color: Colors.white)),
+          if (description.isNotEmpty) ...[
+            SizedBox(height: 4),
+            Text(
+              description,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.bodySm(color: Colors.white.withOpacity(0.85)),
+            ),
+          ],
+          if (date != null || location.isNotEmpty) ...[
+            SizedBox(height: AppSpace.sm),
+            Wrap(
+              spacing: AppSpace.md,
+              runSpacing: AppSpace.xs,
+              children: [
+                if (date != null) _bannerDetail(Icons.calendar_today_outlined, eventDateLabel(date)),
+                if (location.isNotEmpty) _bannerDetail(Icons.location_on_outlined, location),
+              ],
+            ),
+          ],
+          SizedBox(height: AppSpace.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => EventsScreen()),
               ),
-              ElevatedButton(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.full),
-                  ),
-                ),
-                child: Text('RSVP Pass â†’'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
               ),
-            ],
+              iconAlignment: IconAlignment.end,
+              icon: Icon(Icons.arrow_forward, size: 16),
+              label: Text(total > 1 ? 'See all $total upcoming events' : 'See all events'),
+            ),
           ),
         ],
       ),
     );
   }
+
+  Widget _bannerDetail(IconData icon, String text) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white70),
+          SizedBox(width: 4),
+          Flexible(child: Text(text, style: AppText.bodySm(color: Colors.white70))),
+        ],
+      );
 }
 
 class _TextPostCard extends StatelessWidget {
   final FeedPost post;
-  _TextPostCard({required this.post});
+  final VoidCallback? onRepost;
+  final VoidCallback? onReact;
+  final VoidCallback? onComment;
+  final VoidCallback? onReport;
+  final VoidCallback? onDelete;
+  _TextPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -2795,96 +3496,56 @@ class _TextPostCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _postAuthorRow(post),
+          _postAuthorRow(post, onReport: onReport, onDelete: onDelete),
           SizedBox(height: AppSpace.sm),
-          Text(post.body, style: AppText.bodyMd()),
-          if (post.job != null) ...[
-            SizedBox(height: AppSpace.md),
-            _jobHighlightCard(post.job!),
+          if (post.body.isNotEmpty) Text(post.body, style: AppText.bodyMd()),
+          if (post.imageUrl != null) ...[
+            SizedBox(height: AppSpace.sm),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              child: Image.network(
+                post.imageUrl!,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                // A dead CDN link must not blow up the whole feed list.
+                errorBuilder: (_, __, ___) => Container(
+                  height: 160,
+                  color: AppColors.surfaceContainerHigh,
+                  alignment: Alignment.center,
+                  child: Icon(Icons.broken_image_outlined,
+                      color: AppColors.onSurfaceVariant),
+                ),
+                loadingBuilder: (context, child, progress) {
+                  if (progress == null) return child;
+                  return Container(
+                    height: 160,
+                    color: AppColors.surfaceContainerLow,
+                    alignment: Alignment.center,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  );
+                },
+              ),
+            ),
           ],
           SizedBox(height: AppSpace.sm),
-          _reactionRow(
-            aLabel: '${post.reactionCountA}', aIcon: Icons.thumb_up_alt_outlined,
-            bLabel: '${post.reactionCountB} Comments', bIcon: Icons.mode_comment_outlined,
-            cLabel: '${post.reactionCountC} Reposts', cIcon: Icons.repeat,
-            actions: ['Endorse', 'Comment', 'Repost', 'Share'],
-            actionIcons: [
-              Icons.thumb_up_alt_outlined,
-              Icons.mode_comment_outlined,
-              Icons.repeat,
-              Icons.share_outlined,
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _jobHighlightCard(JobHighlight job) {
-    return Container(
-      padding: EdgeInsets.all(AppSpace.md),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(job.title, style: AppText.labelLg()),
-                    Text('${job.company} â€¢ ${job.location}',
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  ],
-                ),
-              ),
-              Pill(
-                text: job.slots,
-                background: AppColors.onPrimaryContainer,
-                foreground: AppColors.primary,
-              ),
-            ],
-          ),
-          SizedBox(height: AppSpace.sm),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: job.tags
-                .map((t) => Pill(
-                      text: t,
-                      background: AppColors.surfaceContainerHigh,
-                      foreground: AppColors.onSurfaceVariant,
-                    ))
-                .toList(),
-          ),
-          SizedBox(height: AppSpace.sm),
-          Row(
-            children: [
-              Icon(Icons.bolt, size: 14, color: AppColors.tertiary),
-              SizedBox(width: 4),
-              Expanded(
-                child: Text('1-Click Verified Submission',
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              ),
-            ],
-          ),
-          SizedBox(height: 6),
-          PrimaryButton(label: 'Fast Apply with Verified Profile', icon: Icons.verified_outlined),
+          _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
         ],
       ),
     );
   }
 }
 
+/// A post with a video attached. The media area is PostVideoPlayer: poster
+/// frame first, real playback on tap. The gradient placeholder below it only
+/// remains for a row whose video_path can't be resolved to a URL.
 class _VideoPostCard extends StatelessWidget {
   final FeedPost post;
-  _VideoPostCard({required this.post});
+  final VoidCallback? onRepost;
+  final VoidCallback? onReact;
+  final VoidCallback? onComment;
+  final VoidCallback? onReport;
+  final VoidCallback? onDelete;
+  _VideoPostCard({required this.post, this.onRepost, this.onReact, this.onComment, this.onReport, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -2895,18 +3556,21 @@ class _VideoPostCard extends StatelessWidget {
         children: [
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _postAuthorRow(post),
+            child: _postAuthorRow(post, onReport: onReport, onDelete: onDelete),
           ),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-            child: Text(post.body, style: AppText.bodyMd()),
-          ),
-          if (post.hashtag != null)
+          if (post.body.isNotEmpty)
             Padding(
-              padding: EdgeInsets.fromLTRB(AppSpace.base, 4, AppSpace.base, 0),
-              child: Text(post.hashtag!, style: AppText.bodySm(color: AppColors.primary)),
+              padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+              child: Text(post.body, style: AppText.bodyMd()),
             ),
           SizedBox(height: AppSpace.sm),
+          if (post.videoUrl != null)
+            PostVideoPlayer(
+              videoUrl: post.videoUrl!,
+              thumbnailUrl: post.thumbnailUrl,
+              label: post.videoLabel,
+            )
+          else
           AspectRatio(
             aspectRatio: 16 / 10,
             child: Stack(
@@ -2921,7 +3585,7 @@ class _VideoPostCard extends StatelessWidget {
                     ),
                   ),
                   child: Center(
-                    child: Icon(Icons.laptop_mac_outlined, color: Colors.white24, size: 64),
+                    child: Icon(Icons.videocam_outlined, color: Colors.white24, size: 64),
                   ),
                 ),
                 if (post.videoLabel != null)
@@ -2932,29 +3596,7 @@ class _VideoPostCard extends StatelessWidget {
                       text: post.videoLabel!,
                       background: Colors.black.withOpacity(0.55),
                       foreground: Colors.white,
-                      icon: Icons.cloud_done_outlined,
-                    ),
-                  ),
-                Center(
-                  child: Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    child: Icon(Icons.play_arrow, color: Colors.white, size: 28),
-                  ),
-                ),
-                if (post.videoDuration != null)
-                  Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: Pill(
-                      text: post.videoDuration!,
-                      background: Colors.black.withOpacity(0.55),
-                      foreground: Colors.white,
+                      icon: Icons.videocam_outlined,
                     ),
                   ),
                 Positioned(
@@ -2964,46 +3606,16 @@ class _VideoPostCard extends StatelessWidget {
                     children: [
                       Icon(Icons.fiber_manual_record, color: AppColors.primary, size: 10),
                       SizedBox(width: 4),
-                      Text('Career Reel',
-                          style: AppText.labelBadge(color: Colors.white)),
+                      Text('Career Reel', style: AppText.labelBadge(color: Colors.white)),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          if (post.featuredProjects != null)
-            Padding(
-              padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 0),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  Text('FEATURED PROJECTS: ',
-                      style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-                  ...post.featuredProjects!.map((p) => Pill(
-                        text: p,
-                        background: AppColors.secondaryContainer.withOpacity(0.4),
-                        foreground: AppColors.secondary,
-                      )),
-                ],
-              ),
-            ),
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _reactionRow(
-              aLabel: '${post.reactionCountA}', aIcon: Icons.volunteer_activism_outlined,
-              bLabel: '${post.reactionCountB} Comments', bIcon: Icons.mode_comment_outlined,
-              cLabel: '${(post.reactionCountC / 1000).toStringAsFixed(1)}k Plays',
-              cIcon: Icons.play_circle_outline,
-              actions: ['Like', 'Share', 'Comment', 'Save'],
-              actionIcons: [
-                Icons.thumb_up_alt_outlined,
-                Icons.share_outlined,
-                Icons.mode_comment_outlined,
-                Icons.bookmark_border,
-              ],
-            ),
+            child: _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
           ),
         ],
       ),
@@ -3020,45 +3632,199 @@ class PostComposerScreen extends StatefulWidget {
 
 class _PostComposerScreenState extends State<PostComposerScreen> {
   bool _isVideo = false;
-  bool _hasAttachment = false;
   bool _submitting = false;
   final _bodyController = TextEditingController();
   final _authService = AuthService(Supabase.instance.client);
   final _feedService = FeedService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
+
+  /// Replaces the old `bool _hasAttachment`. That flag was set by
+  /// `onPressed: () => setState(() => _hasAttachment = true)` and the card
+  /// below it rendered the literal string 'portfolio-image.png' — the
+  /// button never touched device storage, and there was no picker plugin
+  /// in pubspec.yaml for it to call even if it had wanted to.
+  PickedMedia? _attachment;
+
+  /// Video mode's attachment. Picked, transcoded on-device and thumbnailed
+  /// before it is ever shown with a size; null until compression finishes.
+  PickedVideo? _video;
+
+  /// 0–100 while video_compress is running; null the rest of the time.
+  double? _compressPercent;
+  String? _error;
 
   @override
   void dispose() {
+    if (_compressPercent != null) {
+      // Leaving the screen mid-encode: stop burning the CPU on a result
+      // nobody will see.
+      unawaited(_mediaService.cancelCompression());
+    }
     _bodyController.dispose();
     super.dispose();
   }
 
+  Future<void> _pickAttachment() async {
+    if (_isVideo) {
+      await _pickVideo();
+      return;
+    }
+    try {
+      final picked = await _mediaService.pickImage(source: ImageSource.gallery);
+      // null = the user backed out of the gallery. Not an error.
+      if (picked == null || !mounted) return;
+      setState(() {
+        _attachment = picked;
+        _error = null;
+      });
+    } on MediaException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  /// Record with the camera or choose from the gallery, then transcode on
+  /// the device straight away so the preview card can show the real size
+  /// that will be uploaded — not the 60 MB the phone recorded.
+  Future<void> _pickVideo() async {
+    final source = await _scrollSafeSheet<ImageSource>(
+      context,
+      builder: (sheet) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.videocam_outlined, color: AppColors.primary),
+            title: Text('Record a video'),
+            subtitle: Text('Up to ${MediaService.maxVideoSeconds} seconds'),
+            onTap: () => Navigator.pop(sheet, ImageSource.camera),
+          ),
+          ListTile(
+            leading: Icon(Icons.video_library_outlined, color: AppColors.primary),
+            title: Text('Choose from gallery'),
+            subtitle: Text('Compressed on your phone before upload'),
+            onTap: () => Navigator.pop(sheet, ImageSource.gallery),
+          ),
+          SizedBox(height: AppSpace.sm),
+        ],
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    try {
+      final picked = await _mediaService.pickVideo(source: source);
+      // null = the user backed out of the camera/gallery. Not an error.
+      if (picked == null || !mounted) return;
+
+      setState(() {
+        _video = null;
+        _compressPercent = 0;
+        _error = null;
+      });
+      final video = await _mediaService.compressVideo(
+        picked,
+        onProgress: (percent) {
+          if (mounted) setState(() => _compressPercent = percent);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _video = video;
+        _compressPercent = null;
+      });
+    } on MediaException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _compressPercent = null;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _compressPercent = null;
+        _error = AuthErrorMapper.fromAny(e);
+      });
+    }
+  }
+
   Future<void> _submit() async {
     final body = _bodyController.text.trim();
-    if (body.isEmpty) return;
 
-    // Video posting isn't wired up (no capture/compression pipeline yet -
-    // explicitly out of scope). Text posts only for now.
+    // Every one of these guards used to be a bare `return`, so tapping
+    // Publish with an empty body — or with an expired session — did
+    // nothing at all: no message, no spinner, no error. That silent no-op
+    // is what got reported as 'student posts aren\'t reaching Supabase'.
     if (_isVideo) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Video posting is not available yet - try a text post.')),
-      );
+      if (_compressPercent != null) {
+        setState(() => _error = 'Wait for the video to finish compressing.');
+        return;
+      }
+      if (_video == null) {
+        setState(() => _error = 'Record or choose a video before posting.');
+        return;
+      }
+    } else if (body.isEmpty && _attachment == null) {
+      setState(() => _error = 'Write something or attach an image before posting.');
       return;
     }
 
     final authorId = _authService.currentUser?.id;
-    if (authorId == null) return;
+    if (authorId == null) {
+      setState(() => _error = 'Your session has expired. Sign in again to post.');
+      return;
+    }
 
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
     try {
-      await _feedService.createPost(authorId: authorId, body: body);
+      // Upload first, then insert. If storage fails we must not leave a
+      // posts row pointing at an object that was never written.
+      String? imagePath;
+      String? videoPath;
+      String? thumbnailPath;
+      if (_isVideo) {
+        final uploaded = await _mediaService.uploadPostVideo(
+          userId: authorId,
+          video: _video!,
+        );
+        videoPath = uploaded.videoPath;
+        thumbnailPath = uploaded.thumbnailPath;
+      } else if (_attachment != null) {
+        imagePath = await _mediaService.uploadPostImage(
+          userId: authorId,
+          media: _attachment!,
+        );
+      }
+
+      await _feedService.createPost(
+        authorId: authorId,
+        body: body,
+        imagePath: imagePath,
+        videoPath: videoPath,
+        thumbnailPath: thumbnailPath,
+      );
+
+      if (videoPath != null) {
+        // The transcoded copy and its poster are safely in the bucket now.
+        await _mediaService.clearVideoCache();
+      }
+
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Posted'), duration: Duration(seconds: 1)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Posted'), duration: Duration(seconds: 1)),
+      );
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _submitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+      setState(() {
+        _submitting = false;
+        _error = AuthErrorMapper.fromAny(e);
+      });
     }
   }
 
@@ -3075,7 +3841,10 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
               ButtonSegment(value: true, label: Text('Video'), icon: Icon(Icons.videocam_outlined)),
             ],
             selected: {_isVideo},
-            onSelectionChanged: (value) => setState(() => _isVideo = value.first),
+            onSelectionChanged: (value) => setState(() {
+              _isVideo = value.first;
+              _error = null;
+            }),
           ),
           SizedBox(height: AppSpace.base),
           TextField(
@@ -3086,24 +3855,166 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
               hintText: _isVideo ? 'Tell your career story...' : 'Share a professional update...',
               filled: true,
               fillColor: AppColors.surfaceContainerLow,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none),
             ),
           ),
           SizedBox(height: AppSpace.md),
           OutlinedButton.icon(
-            onPressed: () => setState(() => _hasAttachment = true),
-            icon: Icon(_isVideo ? Icons.video_library_outlined : Icons.image_outlined),
-            label: Text(_hasAttachment ? (_isVideo ? 'Video selected' : 'PNG selected') : (_isVideo ? 'Choose video' : 'Add PNG image')),
+            onPressed: (_submitting || _compressPercent != null) ? null : _pickAttachment,
+            icon: Icon(_isVideo ? Icons.videocam_outlined : Icons.image_outlined),
+            label: Text(_isVideo
+                ? (_video != null ? 'Change video' : 'Record or choose a video')
+                : (_attachment != null ? 'Change image' : 'Add image from device')),
           ),
-          if (_hasAttachment) ...[
+          if (_isVideo && _compressPercent != null) ...[
             SizedBox(height: AppSpace.sm),
-            RoundedCard(child: Row(children: [Icon(_isVideo ? Icons.movie_outlined : Icons.image_outlined, color: AppColors.secondary), SizedBox(width: AppSpace.sm), Expanded(child: Text(_isVideo ? 'career-story.mp4' : 'portfolio-image.png')), IconButton(onPressed: () => setState(() => _hasAttachment = false), icon: Icon(Icons.close))])),
+            RoundedCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.compress, size: 18, color: AppColors.primary),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Compressing on your phone… ${_compressPercent!.round()}%',
+                          style: AppText.labelMd(),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => _mediaService.cancelCompression(),
+                        child: Text('Cancel'),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: AppSpace.sm),
+                  LinearProgressIndicator(value: (_compressPercent! / 100).clamp(0.0, 1.0)),
+                ],
+              ),
+            ),
+          ],
+          if (_isVideo && _video != null) ...[
+            SizedBox(height: AppSpace.sm),
+            RoundedCard(
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                    child: Image.file(
+                      _video!.thumbnail,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 56,
+                        height: 56,
+                        color: AppColors.surfaceContainerHigh,
+                        child: Icon(Icons.videocam_outlined, color: AppColors.onSurfaceVariant),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_video!.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.labelMd()),
+                        // The before → after size is the whole point of
+                        // on-device compression; show it, don't claim it.
+                        Text(
+                          '${_video!.readableDuration} · '
+                          '${_video!.readableOriginalSize} → ${_video!.readableSize}'
+                          '${_video!.percentSaved != null ? ' (${_video!.percentSaved}% smaller)' : ''}',
+                          style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Remove video',
+                    onPressed: _submitting ? null : () => setState(() => _video = null),
+                    icon: Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (!_isVideo && _attachment != null) ...[
+            SizedBox(height: AppSpace.sm),
+            RoundedCard(
+              child: Row(
+                children: [
+                  // A real preview of the real file, not an icon next to a
+                  // hardcoded filename.
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                    child: Image.file(
+                      _attachment!.file,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 56,
+                        height: 56,
+                        color: AppColors.surfaceContainerHigh,
+                        child: Icon(Icons.broken_image_outlined,
+                            color: AppColors.onSurfaceVariant),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_attachment!.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.labelMd()),
+                        Text(_attachment!.readableSize,
+                            style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Remove image',
+                    onPressed: _submitting ? null : () => setState(() => _attachment = null),
+                    icon: Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (_error != null) ...[
+            SizedBox(height: AppSpace.sm),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 16, color: AppColors.error),
+                SizedBox(width: 6),
+                Expanded(child: Text(_error!, style: AppText.bodySm(color: AppColors.error))),
+              ],
+            ),
           ],
           SizedBox(height: AppSpace.xl),
           ElevatedButton.icon(
             onPressed: _submitting ? null : _submit,
-            icon: Icon(Icons.send_outlined),
-            label: Text(_isVideo ? 'Submit Video' : 'Publish Post'),
+            icon: _submitting
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.onPrimary),
+                  )
+                : Icon(Icons.send_outlined),
+            label: Text(_submitting
+                ? 'Publishing...'
+                : (_isVideo ? 'Submit Video' : 'Publish Post')),
           ),
         ],
       ),
@@ -3111,67 +4022,274 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   }
 }
 
-class AiProfileInputScreen extends StatelessWidget {
-  AiProfileInputScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('AI Profile Suggestions')),
-      body: ListView(padding: EdgeInsets.all(AppSpace.base), children: [
-        Text('Tell us about your goals', style: AppText.headlineMd()),
-        SizedBox(height: AppSpace.xs),
-        Text('Add free-text experience and the assistant will suggest skills, projects, and profile sections.', style: AppText.bodyMd(color: AppColors.onSurfaceVariant)),
-        SizedBox(height: AppSpace.base),
-        TextField(minLines: 8, maxLines: 12, decoration: InputDecoration(hintText: 'Example: I built a Flutter app that...', filled: true, fillColor: AppColors.surfaceContainerLow, border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.lg), borderSide: BorderSide.none))),
-        SizedBox(height: AppSpace.md),
-        ElevatedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('AI suggestions generated'), duration: Duration(seconds: 1))), icon: Icon(Icons.auto_awesome), label: Text('Generate Suggestions')),
-        SizedBox(height: AppSpace.base),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Suggested next steps', style: AppText.labelLg()), SizedBox(height: AppSpace.sm), Text('Add Docker, TypeScript, and PostgreSQL to your skills.', style: AppText.bodyMd()), Text('Highlight your campus navigator project and live demo.', style: AppText.bodyMd()), Text('Add a short career summary for recruiter searches.', style: AppText.bodyMd())])),
-      ]),
-    );
-  }
-}
-
-class StudentAnalyticsScreen extends StatelessWidget {
+class StudentAnalyticsScreen extends StatefulWidget {
   StudentAnalyticsScreen({super.key});
 
   @override
+  State<StudentAnalyticsScreen> createState() => _StudentAnalyticsScreenState();
+}
+
+class _StudentAnalyticsScreenState extends State<StudentAnalyticsScreen> {
+  final _service = StudentAnalyticsService(Supabase.instance.client);
+  StudentAnalytics? _data;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _error = null);
+    try {
+      final data = await _service.load();
+      if (mounted) setState(() => _data = data);
+    } catch (e) {
+      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  String _plural(int n, String word) => '$n $word${n == 1 ? '' : 's'}';
+
+  @override
   Widget build(BuildContext context) {
+    final data = _data;
     return Scaffold(
       appBar: AppBar(title: Text('Student Analytics')),
-      body: ListView(padding: EdgeInsets.all(AppSpace.base), children: [
-        Text('Your career signal', style: AppText.headlineLg()),
-        Text('See how employers and your network discover your profile.', style: AppText.bodyMd(color: AppColors.onSurfaceVariant)),
-        SizedBox(height: AppSpace.base),
-        _metricGrid([
-          ['482', 'Profile views', Icons.visibility_outlined],
-          ['36', 'New connections', Icons.hub_outlined],
-          ['1.4k', 'Post engagement', Icons.favorite_border],
-          ['82%', 'Profile completeness', Icons.trending_up],
-        ]),
-        SizedBox(height: AppSpace.base),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Profile views over time', style: AppText.labelLg()),
-          SizedBox(height: AppSpace.sm),
-          SizedBox(height: 100, child: CustomPaint(painter: _EngagementPainter(AppColors.primary))),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'].map((label) => Text(label, style: AppText.bodySm(color: AppColors.onSurfaceVariant))).toList()),
-        ])),
-        SizedBox(height: AppSpace.sm),
-        RoundedCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Most searched skills', style: AppText.labelLg()),
-          _skillBar('Flutter & Dart', .86),
-          _skillBar('Python & ML', .71),
-          _skillBar('Cloud Architecture', .54),
-        ])),
-        SizedBox(height: AppSpace.sm),
-        RoundedCard(child: Row(children: [Icon(Icons.groups_outlined, color: AppColors.secondary), SizedBox(width: AppSpace.sm), Expanded(child: Text('Your profile is more complete than 68% of students in your programme.', style: AppText.bodyMd()))])),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: EdgeInsets.all(AppSpace.base),
+          children: [
+            Text('Your career signal', style: AppText.headlineLg()),
+            Text('How employers and your network find and engage with your profile.',
+                style: AppText.bodyMd(color: AppColors.onSurfaceVariant)),
+            SizedBox(height: AppSpace.base),
+            if (_error != null) ...[
+              Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+              TextButton(onPressed: _load, child: Text('Try again')),
+            ] else if (data == null)
+              Padding(
+                padding: EdgeInsets.all(AppSpace.xl),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else
+              ..._content(data),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _content(StudentAnalytics data) {
+    final employability = data.employability;
+    final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
+    return [
+      _metricGrid([
+        ['${data.totalProfileViews}', 'Profile views (${data.days}d)', Icons.visibility_outlined],
+        ['${data.newConnections}', 'New connections (${data.days}d)', Icons.hub_outlined],
+        ['${data.reactions + data.comments}', 'Reactions & comments', Icons.favorite_border],
+        [employability == null ? '—' : '${employability.score}', 'Employability score', Icons.workspace_premium_outlined],
       ]),
+      SizedBox(height: AppSpace.base),
+      // Profile completeness (the RPC's number) still appears in the
+      // programme-comparison card below; the tile shows the broader score.
+      if (employability != null) ...[
+        RoundedCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.workspace_premium_outlined, color: AppColors.secondary),
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(child: Text('Employability score', style: AppText.labelLg())),
+                  Text('${employability.score} / 100', style: AppText.labelLg()),
+                ],
+              ),
+              SizedBox(height: AppSpace.sm),
+              LinearProgressIndicator(
+                value: employability.score / 100,
+                color: AppColors.primary,
+                backgroundColor: AppColors.surfaceContainerHigh,
+              ),
+              SizedBox(height: AppSpace.sm),
+              Text(employability.hint, style: muted),
+            ],
+          ),
+        ),
+        SizedBox(height: AppSpace.sm),
+      ],
+      RoundedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Profile views, last ${data.days} days', style: AppText.labelLg()),
+            SizedBox(height: AppSpace.sm),
+            if (data.totalProfileViews == 0)
+              Text(
+                'Nobody has opened your profile in this period yet. Views from the Network tab and member profiles show up here.',
+                style: muted,
+              )
+            else ...[
+              _DailyBars(values: data.dailyProfileViews, height: 100),
+              SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [Text('${data.days} days ago', style: muted), Text('Today', style: muted)],
+              ),
+            ],
+          ],
+        ),
+      ),
+      SizedBox(height: AppSpace.sm),
+      RoundedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Your skills businesses search for', style: AppText.labelLg()),
+            if (data.searchedSkills.isEmpty)
+              Padding(
+                padding: EdgeInsets.only(top: AppSpace.sm),
+                child: Text('No business has searched for any of your listed skills yet.', style: muted),
+              )
+            else
+              ..._searchedSkillRows(data.searchedSkills),
+          ],
+        ),
+      ),
+      SizedBox(height: AppSpace.sm),
+      RoundedCard(
+        child: Row(
+          children: [
+            Icon(Icons.groups_outlined, color: AppColors.secondary),
+            SizedBox(width: AppSpace.sm),
+            Expanded(child: Text(_programmeComparison(data), style: AppText.bodyMd())),
+          ],
+        ),
+      ),
+      SizedBox(height: AppSpace.sm),
+      Text(
+        'You have ${_plural(data.posts, 'post')}, with ${_plural(data.reactions, 'reaction')} and ${_plural(data.comments, 'comment')}.',
+        style: muted,
+      ),
+    ];
+  }
+
+  Iterable<Widget> _searchedSkillRows(List<MapEntry<String, int>> skills) {
+    final most = skills.fold<int>(0, (peak, e) => e.value > peak ? e.value : peak);
+    return skills.map((e) => Padding(
+          padding: EdgeInsets.only(top: AppSpace.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: Text(e.key, style: AppText.bodySm())),
+                  Text(e.value == 1 ? '1 search' : '${e.value} searches', style: AppText.labelMd()),
+                ],
+              ),
+              SizedBox(height: 4),
+              LinearProgressIndicator(
+                value: most == 0 ? 0 : e.value / most,
+                color: AppColors.secondary,
+                backgroundColor: AppColors.surfaceContainerHigh,
+              ),
+            ],
+          ),
+        ));
+  }
+
+  String _programmeComparison(StudentAnalytics data) {
+    final mine = data.myCompleteness;
+    final average = data.programmeAverage;
+    if (mine == null || average == null) {
+      return 'Add your programme under Education on your Portfolio to compare your profile with others in your programme.';
+    }
+    final diff = (mine - average).round();
+    final relation = diff > 0
+        ? '$diff points above'
+        : diff < 0
+            ? '${-diff} points below'
+            : 'level with';
+    return 'Your profile is ${mine.round()}% complete, $relation the ${average.round()}% average in your programme.';
+  }
+}
+
+/// Bars for a zero-filled daily series. Plain widgets rather than a
+/// CustomPainter so they repaint with the theme on a dark-mode toggle.
+class _DailyBars extends StatelessWidget {
+  _DailyBars({required this.values, required this.height});
+
+  final List<int> values;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final peak = values.fold<int>(0, (a, b) => b > a ? b : a);
+    return SizedBox(
+      height: height,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          for (final v in values)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 1),
+                child: Container(
+                  height: v == 0 || peak == 0 ? 2 : (height * v / peak).clamp(4.0, height),
+                  decoration: BoxDecoration(
+                    color: v == 0 ? AppColors.surfaceContainerHigh : AppColors.primary,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(2)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-Widget _postAuthorRow(FeedPost post) {
+/// Asks first, then deletes. Returns true only once the post is gone, so the
+/// caller can drop it from its list; a failure is shown here. Keshav's QA
+/// pass (2026-09-11) found the ••• menu only ever offered Report, and hid
+/// even that on your own posts, so an author had no way to remove a post.
+Future<bool> _confirmAndDeletePost(BuildContext context, FeedPost post) async {
+  final postId = post.id;
+  if (postId == null) return false;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text('Delete this post?'),
+      content: Text('It will be removed from the feed with its likes, comments and reposts. This can\'t be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          style: TextButton.styleFrom(foregroundColor: AppColors.error),
+          child: Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return false;
+
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await FeedService(Supabase.instance.client).deletePost(postId);
+    messenger.showSnackBar(SnackBar(content: Text('Post deleted.')));
+    return true;
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    return false;
+  }
+}
+
+/// [onDelete] is passed for the viewer's own posts and [onReport] for
+/// everyone else's, so the ••• menu offers whichever applies.
+Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport, VoidCallback? onDelete}) {
   return Row(
     children: [
       InitialsAvatar(initials: post.authorName.split(' ').map((e) => e[0]).take(2).join()),
@@ -3213,11 +4331,61 @@ Widget _postAuthorRow(FeedPost post) {
           ),
         ),
       ),
-      Icon(Icons.more_horiz, color: AppColors.onSurfaceVariant),
+      if (onReport != null || onDelete != null)
+        PopupMenuButton<String>(
+          tooltip: 'More',
+          icon: Icon(Icons.more_horiz, color: AppColors.onSurfaceVariant),
+          onSelected: (value) {
+            if (value == 'delete') onDelete?.call();
+            if (value == 'report') onReport?.call();
+          },
+          itemBuilder: (_) => [
+            if (onDelete != null)
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('Delete post', style: TextStyle(color: AppColors.error)),
+              ),
+            if (onReport != null) PopupMenuItem(value: 'report', child: Text('Report post')),
+          ],
+        ),
     ],
   );
 }
 
+/// Like / Comment / Repost / Share for a feed card. Share has nothing behind
+/// it yet, so it stays disabled.
+Widget _engagementRow(
+  FeedPost post, {
+  VoidCallback? onReact,
+  VoidCallback? onComment,
+  VoidCallback? onRepost,
+}) {
+  return _reactionRow(
+    aLabel: '${post.reactionCountA} ${post.reactionCountA == 1 ? 'Like' : 'Likes'}',
+    aIcon: Icons.thumb_up_alt_outlined,
+    bLabel: '${post.reactionCountB} ${post.reactionCountB == 1 ? 'Comment' : 'Comments'}',
+    bIcon: Icons.mode_comment_outlined,
+    cLabel: '${post.reactionCountC} ${post.reactionCountC == 1 ? 'Repost' : 'Reposts'}',
+    cIcon: Icons.repeat,
+    actions: ['Like', 'Comment', 'Repost', 'Share'],
+    actionIcons: [
+      post.isReacted ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+      Icons.mode_comment_outlined,
+      Icons.repeat,
+      Icons.share_outlined,
+    ],
+    actionHandlers: [onReact, onComment, onRepost, null],
+    activeActions: {if (post.isReacted) 0, if (post.isReposted) 2},
+  );
+}
+
+/// Engagement row.
+///
+/// Every button here used to be built with a literal `onPressed: () {}` —
+/// all four actions (Endorse / Comment / Repost / Share) on every card in
+/// the feed were no-ops that rendered as enabled and did nothing on tap.
+/// Handlers are now passed in per action; an action with a null handler
+/// renders visibly disabled instead of silently swallowing the tap.
 Widget _reactionRow({
   required String aLabel,
   required IconData aIcon,
@@ -3227,6 +4395,8 @@ Widget _reactionRow({
   required IconData cIcon,
   required List<String> actions,
   required List<IconData> actionIcons,
+  List<VoidCallback?>? actionHandlers,
+  Set<int> activeActions = const {},
 }) {
   return Column(
     children: [
@@ -3245,10 +4415,16 @@ Widget _reactionRow({
         runSpacing: 8,
         alignment: WrapAlignment.spaceBetween,
         children: List.generate(actions.length, (i) {
+          final handler =
+              (actionHandlers != null && i < actionHandlers.length) ? actionHandlers[i] : null;
+          final active = activeActions.contains(i);
+          final tint = active
+              ? AppColors.primary
+              : (handler == null ? AppColors.outline : AppColors.onSurfaceVariant);
           return TextButton.icon(
-            onPressed: () {},
-            icon: Icon(actionIcons[i], size: 16, color: AppColors.onSurfaceVariant),
-            label: Text(actions[i], style: AppText.labelMd(color: AppColors.onSurfaceVariant)),
+            onPressed: handler,
+            icon: Icon(actionIcons[i], size: 16, color: tint),
+            label: Text(actions[i], style: AppText.labelMd(color: tint)),
           );
         }),
       ),
@@ -3268,8 +4444,8 @@ Widget _metricLabel(IconData icon, String label) {
 }
 
 // =====================================================================
-// SECTION 9 â€” JOBS SCREEN
-// (No Stitch export existed for this tab â€” built to match the design
+// SECTION 9 — JOBS SCREEN
+// (No Stitch export existed for this tab — built to match the design
 // system so the bottom nav has four real destinations, not placeholders.)
 // =====================================================================
 
@@ -3283,6 +4459,8 @@ class JobsScreen extends StatefulWidget {
 class _JobsScreenState extends State<JobsScreen> {
   final _authService = AuthService(Supabase.instance.client);
   final _jobsService = JobsService(Supabase.instance.client);
+  final _profileService = ProfileService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
   final _searchController = TextEditingController();
 
   bool _loading = true;
@@ -3290,6 +4468,14 @@ class _JobsScreenState extends State<JobsScreen> {
   List<Map<String, dynamic>> _all = [];
   String _typeFilter = 'All';
   String _query = '';
+  String _role = '';
+
+  /// recommend_opportunities() rows keyed by opportunity id, and their
+  /// ranked order. The header used to say "SMART-MATCHED FOR YOU" over a
+  /// plain list of every approved listing; nothing was matched.
+  Map<String, Map<String, dynamic>> _matches = {};
+  List<String> _recommendedIds = [];
+  String? _matchError;
 
   static const _typeOptions = ['All', 'internship', 'learnership', 'part_time', 'graduate_vacancy'];
   static const _typeLabels = {
@@ -3299,6 +4485,8 @@ class _JobsScreenState extends State<JobsScreen> {
     'part_time': 'Part-time',
     'graduate_vacancy': 'Graduate Vacancy',
   };
+
+  bool get _hasCareerProfile => _role == 'student' || _role == 'alumni';
 
   @override
   void initState() {
@@ -3318,10 +4506,29 @@ class _JobsScreenState extends State<JobsScreen> {
       _error = null;
     });
     try {
-      final rows = await _jobsService.fetchApprovedOpportunities();
+      // Matching runs alongside the listing query, and its failure is kept
+      // rather than thrown: the full list is still useful without it.
+      final matching = _jobsService
+          .fetchRecommendations()
+          .then<Object>((rows) => rows, onError: (Object e) => e);
+      final results = await Future.wait<Object?>([
+        _jobsService.fetchApprovedOpportunities(),
+        _authService.fetchOwnProfile(),
+        matching,
+      ]);
+
+      final profile = results[1] as Map<String, dynamic>?;
+      final matched = results[2];
+      final recommendations =
+          matched is List ? List<Map<String, dynamic>>.from(matched) : <Map<String, dynamic>>[];
+
       if (!mounted) return;
       setState(() {
-        _all = rows;
+        _all = results[0] as List<Map<String, dynamic>>;
+        _role = profile?['role'] as String? ?? '';
+        _matches = {for (final r in recommendations) r['opportunity_id'] as String: r};
+        _recommendedIds = [for (final r in recommendations) r['opportunity_id'] as String];
+        _matchError = matched is List ? null : AuthErrorMapper.fromAny(matched!);
         _loading = false;
       });
     } catch (e) {
@@ -3333,21 +4540,95 @@ class _JobsScreenState extends State<JobsScreen> {
     }
   }
 
-  List<Map<String, dynamic>> get _filtered => _all.where((o) {
-        final matchesType = _typeFilter == 'All' || o['opportunity_type'] == _typeFilter;
-        final title = (o['title'] as String? ?? '').toLowerCase();
-        final matchesQuery = _query.isEmpty || title.contains(_query.toLowerCase());
-        return matchesType && matchesQuery;
-      }).toList();
+  bool _passesFilters(Map<String, dynamic> o) {
+    final matchesType = _typeFilter == 'All' || o['opportunity_type'] == _typeFilter;
+    final title = (o['title'] as String? ?? '').toLowerCase();
+    final matchesQuery = _query.isEmpty || title.contains(_query.toLowerCase());
+    return matchesType && matchesQuery;
+  }
 
+  List<Map<String, dynamic>> get _filtered => _all.where(_passesFilters).toList();
+
+  /// Recommended listings in ranked order, as full rows (the RPC returns
+  /// only ids and scores), under the same search and type filter.
+  List<Map<String, dynamic>> get _recommended {
+    final byId = {for (final o in _all) o['id'] as String: o};
+    return [
+      for (final id in _recommendedIds)
+        if (byId[id] != null && _passesFilters(byId[id]!)) byId[id]!,
+    ];
+  }
+
+  /// Applying shares the member's CV on file with that employer for this
+  /// application (migration 039). The member is told so before confirming:
+  /// Guidelines 2.1 — a business sees only what a student explicitly makes
+  /// visible, and this is that explicit act. No CV on file is not an error;
+  /// the employer then sees the profile only.
   Future<void> _apply(Map<String, dynamic> job) async {
     final studentId = _authService.currentUser?.id;
     if (studentId == null) return;
+
+    final title = job['title'] as String? ?? 'this opportunity';
+    final businessProfile = (job['profiles'] as Map<String, dynamic>?)?['business_profiles'];
+    final companyRaw =
+        (businessProfile is Map ? businessProfile['company_name'] as String? : null)?.trim();
+    final company = (companyRaw == null || companyRaw.isEmpty) ? 'the employer' : companyRaw;
+
+    String? cvPath;
     try {
-      await _jobsService.apply(opportunityId: job['id'] as String, studentId: studentId);
+      cvPath = (await _profileService.fetchCvStatus(studentId)).path;
+    } catch (_) {
+      // Can't read the CV status: apply without it rather than block.
+    }
+    if (!mounted) return;
+
+    final hasCv = cvPath != null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Apply to $title?'),
+        content: Text(hasCv
+            ? 'Your CV on file will be shared with $company for this application, '
+                'along with your profile.'
+            : 'You have no CV on file, so $company will see your profile only. '
+                'You can add one under Career AI → Import my CV and apply afterwards.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(hasCv ? 'Share CV & apply' : 'Apply anyway'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      String? snapshot;
+      if (cvPath != null) {
+        try {
+          snapshot = await _mediaService.snapshotCvForApplication(
+            userId: studentId,
+            sourcePath: cvPath,
+          );
+        } catch (_) {
+          // The copy is a nicety (the business sees what was submitted even
+          // if the CV changes later). If it fails, attach the live CV
+          // instead — the storage policy accepts either key.
+          snapshot = cvPath;
+        }
+      }
+      await _jobsService.apply(
+        opportunityId: job['id'] as String,
+        studentId: studentId,
+        cvPath: snapshot,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Applied to ${job['title']}.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(snapshot != null
+            ? 'Applied to $title. Your CV was attached.'
+            : 'Applied to $title.'),
+      ));
     } on PostgrestException catch (e) {
       if (!mounted) return;
       final message = e.code == '23505'
@@ -3398,291 +4679,242 @@ class _JobsScreenState extends State<JobsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.only(bottom: 24),
-      children: [
-        RichfieldHeader(
-          title: 'Opportunities',
-          subtitle: 'SMART-MATCHED FOR YOU',
-          onAvatarTap: () => _openAccountMenu(context, _authService),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: TextField(
-            controller: _searchController,
-            onChanged: (v) => setState(() => _query = v),
-            decoration: InputDecoration(
-              prefixIcon: Icon(Icons.search, size: 18),
-              hintText: 'Search internships, learnerships, graduate rolesâ€¦',
-              filled: true,
-              fillColor: AppColors.surfaceContainerLow,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                borderSide: BorderSide.none,
-              ),
-            ),
+    final muted = AppText.bodySm(color: AppColors.onSurfaceVariant);
+    final horizontal = EdgeInsets.symmetric(horizontal: AppSpace.base);
+    final recommended = _recommended;
+    final filtered = _filtered;
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: EdgeInsets.only(bottom: 24),
+        children: [
+          RichfieldHeader(
+            title: 'Opportunities',
+            subtitle: 'INTERNSHIPS • LEARNERSHIPS • GRADUATE ROLES',
+            onAvatarTap: () => _openAccountMenu(context, _authService),
           ),
-        ),
-        SizedBox(height: AppSpace.sm),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SizedBox(
-            height: 34,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _typeOptions.length,
-              separatorBuilder: (_, __) => SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final opt = _typeOptions[i];
-                return ChoiceChip(
-                  label: Text(_typeLabels[opt]!),
-                  selected: _typeFilter == opt,
-                  onSelected: (_) => setState(() => _typeFilter = opt),
-                );
-              },
-            ),
-          ),
-        ),
-        SizedBox(height: AppSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SectionHeader(title: 'Matched to Your Profile'),
-        ),
-        if (_loading)
           Padding(
-            padding: EdgeInsets.all(AppSpace.xl),
-            child: Center(child: CircularProgressIndicator()),
-          ),
-        if (!_loading && _error != null)
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-            child: Text(_error!, style: AppText.bodySm(color: AppColors.error)),
-          ),
-        if (!_loading && _error == null && _filtered.isEmpty)
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-            child: Text('No opportunities match right now.',
-                style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-          ),
-        if (!_loading && _error == null)
-          ..._filtered.map((job) {
-            final business = job['profiles']?['business_profiles'] as Map<String, dynamic>?;
-            final company = business?['company_name'] as String? ?? 'Unknown company';
-            final location = business?['location'] as String? ?? '';
-            final skills = (job['required_skills'] as List?)?.cast<String>() ?? [];
-            return Padding(
-              padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
-              child: RoundedCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppColors.secondaryContainer,
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                          ),
-                          child: Icon(Icons.business_center_outlined, color: AppColors.secondary),
-                        ),
-                        SizedBox(width: AppSpace.sm),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(job['title'] as String? ?? '', style: AppText.labelLg()),
-                                  Text(
-                                    '$company${location.isEmpty ? '' : ' â€¢ $location'}',
-                                    style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Pill(
-                            text: _typeLabels[job['opportunity_type']] ??
-                                job['opportunity_type'] as String? ??
-                                '',
-                            background: AppColors.tertiaryContainer.withOpacity(0.3),
-                            foreground: AppColors.tertiary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: AppSpace.sm),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: skills
-                          .map((s) => Pill(
-                                text: s,
-                                background: AppColors.surfaceContainerHigh,
-                                foreground: AppColors.onSurfaceVariant,
-                              ))
-                          .toList(),
-                    ),
-                    SizedBox(height: AppSpace.sm),
-                    Row(
-                      children: [
-                        SecondaryButton(
-                          label: 'View Details',
-                          icon: Icons.visibility_outlined,
-                          onPressed: () => _showDetails(job),
-                        ),
-                        SizedBox(width: AppSpace.sm),
-                        Expanded(
-                          child: PrimaryButton(
-                            label: 'Apply',
-                            icon: Icons.send_outlined,
-                            fullWidth: true,
-                            onPressed: () => _apply(job),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+            padding: horizontal,
+            child: TextField(
+              controller: _searchController,
+              onChanged: (v) => setState(() => _query = v),
+              decoration: InputDecoration(
+                prefixIcon: Icon(Icons.search, size: 18),
+                hintText: 'Search internships, learnerships, graduate roles…',
+                filled: true,
+                fillColor: AppColors.surfaceContainerLow,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  borderSide: BorderSide.none,
                 ),
               ),
-            );
-          }),
-      ],
+            ),
+          ),
+          SizedBox(height: AppSpace.sm),
+          Padding(
+            padding: horizontal,
+            child: SizedBox(
+              height: 34,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _typeOptions.length,
+                separatorBuilder: (_, __) => SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final opt = _typeOptions[i];
+                  return ChoiceChip(
+                    label: Text(_typeLabels[opt]!),
+                    selected: _typeFilter == opt,
+                    onSelected: (_) => setState(() => _typeFilter = opt),
+                  );
+                },
+              ),
+            ),
+          ),
+          SizedBox(height: AppSpace.base),
+          if (_loading)
+            Padding(
+              padding: EdgeInsets.all(AppSpace.xl),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          if (!_loading && _error != null)
+            Padding(
+              padding: horizontal,
+              child: Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+            ),
+          if (!_loading && _error == null) ...[
+            if (_hasCareerProfile) ...[
+              Padding(padding: horizontal, child: SectionHeader(title: 'Recommended for you')),
+              Padding(
+                padding: horizontal,
+                child: Text(
+                  "Ranked by how many of a listing's required skills are on your profile, and whether it's open to your programme.",
+                  style: muted,
+                ),
+              ),
+              SizedBox(height: AppSpace.sm),
+              if (_matchError != null)
+                Padding(
+                  padding: horizontal,
+                  child: Text(_matchError!, style: AppText.bodySm(color: AppColors.error)),
+                )
+              else if (recommended.isEmpty)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+                  child: RoundedCard(
+                    child: Text(
+                      _recommendedIds.isEmpty
+                          ? 'No matches yet. Add skills and your programme on your Portfolio, and listings that ask for them will appear here.'
+                          : 'None of your recommended listings match this search or filter.',
+                      style: muted,
+                    ),
+                  ),
+                )
+              else
+                ...recommended.map(_jobCard),
+              SizedBox(height: AppSpace.sm),
+            ],
+            Padding(padding: horizontal, child: SectionHeader(title: 'All opportunities')),
+            if (filtered.isEmpty)
+              Padding(
+                padding: horizontal,
+                child: Text('No opportunities match right now.', style: muted),
+              )
+            else
+              ...filtered.map(_jobCard),
+          ],
+        ],
+      ),
     );
   }
-}
 
-// =====================================================================
-// SECTION 10 â€” NETWORK SCREEN
-// (Also built to match the design system â€” no Stitch export provided.)
-// =====================================================================
+  Widget _jobCard(Map<String, dynamic> job) {
+    final business = job['profiles']?['business_profiles'] as Map<String, dynamic>?;
+    final company = business?['company_name'] as String? ?? 'Unknown company';
+    final location = business?['location'] as String? ?? '';
+    final skills = (job['required_skills'] as List?)?.cast<String>() ?? [];
+    final match = _matches[job['id']];
+    final matchedSkills = {
+      for (final s in (match?['matched_skills'] as List?)?.cast<String>() ?? const <String>[])
+        s.trim().toLowerCase(),
+    };
+    final programmeMatch = match?['programme_match'] == true;
+    final score = (match?['match_score'] as num?)?.toDouble();
 
-class NetworkScreen extends StatelessWidget {
-  NetworkScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.only(bottom: 24),
-      children: [
-        RichfieldHeader(
-          title: 'Network',
-          subtitle: '482 CONNECTIONS',
-          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: TextField(
-            decoration: InputDecoration(
-              prefixIcon: Icon(Icons.search, size: 18),
-              hintText: 'Search students, alumni, recruitersâ€¦',
-              filled: true,
-              fillColor: AppColors.surfaceContainerLow,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: AppSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SectionHeader(title: 'People You May Know'),
-        ),
-        SizedBox(
-          height: 196,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-            itemCount: MockData.suggestions.length,
-            separatorBuilder: (_, __) => SizedBox(width: AppSpace.sm),
-            itemBuilder: (_, i) {
-              final s = MockData.suggestions[i];
-              return SizedBox(
-                width: 150,
-                child: RoundedCard(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      InitialsAvatar(initials: s.initials, radius: 24),
-                      SizedBox(height: AppSpace.sm),
-                      Text(s.name,
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.labelMd()),
-                      SizedBox(height: 2),
-                      Text(s.subtitle,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                      Spacer(),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton(
-                          onPressed: () {},
-                          style: OutlinedButton.styleFrom(
-                            padding: EdgeInsets.symmetric(vertical: 6),
-                            side: BorderSide(color: AppColors.primary),
-                          ),
-                          child: Text('Connect', style: AppText.labelMd(color: AppColors.primary)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(height: AppSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: SectionHeader(title: 'Pending Requests'),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-          child: RoundedCard(
-            child: Row(
+    return Padding(
+      padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+      child: RoundedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                InitialsAvatar(initials: 'ZM'),
+                Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: Icon(Icons.business_center_outlined, color: AppColors.secondary),
+                ),
                 SizedBox(width: AppSpace.sm),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Zanele Mokoena', style: AppText.labelLg()),
-                      Text('BCom Accounting â€¢ Class of 2026',
-                          style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+                      Text(job['title'] as String? ?? '', style: AppText.labelLg()),
+                      Text(
+                        '$company${location.isEmpty ? '' : ' • $location'}',
+                        style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                      ),
                     ],
                   ),
                 ),
-                IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.close, color: AppColors.onSurfaceVariant),
-                ),
-                IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.check_circle, color: AppColors.successGreen),
+                SizedBox(width: AppSpace.sm),
+                Pill(
+                  text: _typeLabels[job['opportunity_type']] ?? job['opportunity_type'] as String? ?? '',
+                  background: AppColors.tertiaryContainer.withOpacity(0.3),
+                  foreground: AppColors.tertiary,
                 ),
               ],
             ),
-          ),
+            if (match != null) ...[
+              SizedBox(height: AppSpace.sm),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (score != null)
+                    Pill(
+                      text: '${(score * 100).round()}% MATCH',
+                      icon: Icons.auto_awesome,
+                      background: AppColors.successGreenBg,
+                      foreground: AppColors.successGreen,
+                    ),
+                  if (programmeMatch)
+                    Pill(
+                      text: 'YOUR PROGRAMME',
+                      icon: Icons.school_outlined,
+                      background: AppColors.secondaryContainer,
+                      foreground: AppColors.onSecondaryContainer,
+                    ),
+                ],
+              ),
+            ],
+            SizedBox(height: AppSpace.sm),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final s in skills)
+                  matchedSkills.contains(s.trim().toLowerCase())
+                      ? Pill(
+                          text: s,
+                          icon: Icons.check,
+                          background: AppColors.successGreenBg,
+                          foreground: AppColors.successGreen,
+                        )
+                      : Pill(
+                          text: s,
+                          background: AppColors.surfaceContainerHigh,
+                          foreground: AppColors.onSurfaceVariant,
+                        ),
+              ],
+            ),
+            SizedBox(height: AppSpace.sm),
+            Row(
+              children: [
+                SecondaryButton(
+                  label: 'View Details',
+                  icon: Icons.visibility_outlined,
+                  onPressed: () => _showDetails(job),
+                ),
+                SizedBox(width: AppSpace.sm),
+                Expanded(
+                  child: PrimaryButton(
+                    label: 'Apply',
+                    icon: Icons.send_outlined,
+                    fullWidth: true,
+                    onPressed: () => _apply(job),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
 // =====================================================================
-// SECTION 11 â€” PORTFOLIO SCREEN (most detailed â€” 1:1 with code.html)
+// SECTION 10 — NETWORK SCREEN: now screens/network_screen.dart (real
+// connections, requests, suggestions and search).
+// =====================================================================
+
+// =====================================================================
+// SECTION 11 — PORTFOLIO SCREEN (most detailed — 1:1 with code.html)
 // =====================================================================
 
 class PortfolioScreen extends StatefulWidget {
@@ -3694,94 +4926,466 @@ class PortfolioScreen extends StatefulWidget {
   State<PortfolioScreen> createState() => _PortfolioScreenState();
 }
 
+/// One card in the activity list: a post the member wrote, or one they
+/// reposted (credited to its original author, dated by the repost).
+class _ActivityItem {
+  _ActivityItem({required this.post, required this.at, required this.isRepost});
+
+  final FeedPost post;
+  final DateTime at;
+  final bool isRepost;
+}
+
 class _PortfolioScreenState extends State<PortfolioScreen> {
-  bool _recruiterVisible = true;
-  bool _compactDensity = false;
   Map<String, dynamic>? _profile;
+
+  PortfolioData _portfolio = PortfolioData();
+  bool _loadingPortfolio = true;
+  String? _portfolioError;
+
+  /// profiles.cv_path / cv_uploaded_at (migration 038). Read separately
+  /// from the profile row; see ProfileService.fetchCvStatus.
+  ({String? path, DateTime? uploadedAt})? _cvStatus;
+  bool _cvBusy = false;
+
+  List<_ActivityItem> _activity = [];
+  bool _loadingActivity = true;
+  String? _activityError;
+
+  final _profileService = ProfileService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
+  final _portfolioService = PortfolioService(Supabase.instance.client);
+  final _feedService = FeedService(Supabase.instance.client);
+
+  String? get _userId => widget.authService.currentUser?.id;
+  String get _role => _profile?['role'] as String? ?? '';
+
+  /// Students and alumni keep a career portfolio. A business or staff
+  /// account's tab is its header, links and activity — it used to show them
+  /// the same invented student credentials as everyone else.
+  bool get _hasCareerProfile => _role == 'student' || _role == 'alumni';
+
+  TextStyle get _muted => AppText.bodySm(color: AppColors.onSurfaceVariant);
 
   @override
   void initState() {
     super.initState();
-    widget.authService.fetchOwnProfile().then((p) {
-      if (mounted) setState(() => _profile = p);
-    }).catchError((_) {
-      // Keep showing the placeholder header on failure — not fatal.
+    _reloadProfile();
+    _loadPortfolio();
+    _loadCvStatus();
+    _loadActivity();
+  }
+
+  Future<void> _refresh() async {
+    await Future.wait([_reloadProfile(), _loadPortfolio(), _loadCvStatus(), _loadActivity()]);
+  }
+
+  Future<void> _loadCvStatus() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final status = await _profileService.fetchCvStatus(userId);
+      if (!mounted) return;
+      setState(() => _cvStatus = status);
+    } catch (_) {
+      // The card falls back to "no CV on file"; nothing else depends on it.
+    }
+  }
+
+  Future<void> _openCv() async {
+    final path = _cvStatus?.path;
+    if (path == null) return;
+    setState(() => _cvBusy = true);
+    try {
+      final url = await _mediaService.cvSignedUrl(path);
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No app on this device could open the PDF.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _cvBusy = false);
+    }
+  }
+
+  Future<void> _removeCv() async {
+    final userId = _userId;
+    final path = _cvStatus?.path;
+    if (userId == null || path == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Remove your CV?'),
+        content: Text('The PDF is deleted from your profile. Your extracted details stay.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Keep it')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text('Remove', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _cvBusy = true);
+    try {
+      // Pointer first, then the object: a row pointing at a missing file is
+      // the worse of the two failure modes.
+      await _profileService.setCvPath(userId: userId, path: null);
+      await _mediaService.removeCv(path);
+      if (!mounted) return;
+      setState(() => _cvStatus = (path: null, uploadedAt: null));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    } finally {
+      if (mounted) setState(() => _cvBusy = false);
+    }
+  }
+
+  Future<void> _loadPortfolio() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final data = await _portfolioService.load(userId);
+      if (!mounted) return;
+      setState(() {
+        _portfolio = data;
+        _portfolioError = null;
+        _loadingPortfolio = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _portfolioError = AuthErrorMapper.fromAny(e);
+        _loadingPortfolio = false;
+      });
+    }
+  }
+
+  Future<void> _loadActivity() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final results = await Future.wait<Object>([
+        _feedService.fetchPostsByAuthor(userId),
+        _feedService.fetchRepostsBy(userId),
+        _feedService.fetchMyReactedPostIds(userId),
+      ]);
+      final ownPosts = results[0] as List<Map<String, dynamic>>;
+      final reposts = results[1] as List<Map<String, dynamic>>;
+      final reactedIds = results[2] as Set<String>;
+      final repostedIds = {
+        for (final r in reposts)
+          if (r['posts'] is Map) (r['posts'] as Map)['id'] as String,
+      };
+      DateTime when(Object? iso) => DateTime.tryParse(iso as String? ?? '') ?? DateTime.now();
+
+      final items = <_ActivityItem>[
+        for (final row in ownPosts)
+          _ActivityItem(
+            post: _feedPostFromRow(
+              row,
+              repostedIds: repostedIds,
+              reactedIds: reactedIds,
+              mediaService: _mediaService,
+            ),
+            at: when(row['created_at']),
+            isRepost: false,
+          ),
+        for (final r in reposts)
+          if (r['posts'] is Map)
+            _ActivityItem(
+              post: _feedPostFromRow(
+                Map<String, dynamic>.from(r['posts'] as Map),
+                repostedIds: repostedIds,
+                reactedIds: reactedIds,
+                mediaService: _mediaService,
+              ),
+              at: when(r['created_at']),
+              isRepost: true,
+            ),
+      ]..sort((a, b) => b.at.compareTo(a.at));
+
+      if (!mounted) return;
+      setState(() {
+        _activity = items;
+        _activityError = null;
+        _loadingActivity = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _activityError = AuthErrorMapper.fromAny(e);
+        _loadingActivity = false;
+      });
+    }
+  }
+
+  Future<void> _deletePost(_ActivityItem item) async {
+    if (!await _confirmAndDeletePost(context, item.post)) return;
+    if (!mounted) return;
+    // Your own post can also be in this list a second time, as your repost.
+    setState(() => _activity = _activity.where((a) => a.post.id != item.post.id).toList());
+  }
+
+  Future<void> _toggleRepost(FeedPost post) async {
+    final postId = post.id;
+    final userId = _userId;
+    if (postId == null || userId == null) return;
+    try {
+      await _feedService.toggleRepost(
+        postId: postId,
+        userId: userId,
+        currentlyReposted: post.isReposted,
+      );
+      await _loadActivity();
+    } catch (e) {
+      _snack(AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  Future<void> _toggleReaction(FeedPost post) async {
+    final postId = post.id;
+    final userId = _userId;
+    if (postId == null || userId == null) return;
+    try {
+      await _feedService.toggleReaction(postId: postId, userId: userId, currentlyReacted: post.isReacted);
+      await _loadActivity();
+    } catch (e) {
+      _snack(AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  void _openComments(FeedPost post) {
+    final postId = post.id;
+    if (postId == null) return;
+    showCommentsSheet(context, postId: postId, onCountChanged: (_) {}).then((_) {
+      if (mounted) _loadActivity();
     });
+  }
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _addEntry(PortfolioSection section) async {
+    final userId = _userId;
+    if (userId == null) return;
+    final saved = await showPortfolioEntrySheet(
+      context,
+      section: section,
+      onSave: (values) => _portfolioService.add(section, userId: userId, values: values),
+    );
+    if (saved) await _loadPortfolio();
+  }
+
+  Future<void> _removeEntry(PortfolioSection section, Map<String, dynamic> row) async {
+    final name = (row['title'] ?? row['programme'] ?? row['role_title'] ?? 'this entry').toString();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Remove "$name"?'),
+        content: Text('It will no longer appear on your portfolio or to anyone viewing your profile.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text('Remove')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _portfolioService.remove(section, row['id'] as String);
+      await _loadPortfolio();
+    } catch (e) {
+      _snack(AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  /// Opens the edit form and adopts whatever row comes back, so the header
+  /// repaints from the database's version of the truth rather than from
+  /// what the form hoped it wrote.
+  /// QR Connect: a code another member scans with their phone camera to
+  /// open this profile (richfield://member/<uid>, services/member_link.dart).
+  /// Always dark-on-white whatever the theme, so cameras read it.
+  void _showMyQrCode() {
+    final profileId = widget.authService.currentUser?.id;
+    if (profileId == null) return;
+    final link = MemberLink.linkFor(profileId);
+    final firstName = _profile?['first_name'] as String? ?? '';
+    final lastName = _profile?['last_name'] as String? ?? '';
+    final displayName = ('$firstName $lastName').trim();
+
+    unawaited(_scrollSafeSheet<void>(
+      context,
+      builder: (sheet) => Padding(
+        padding: EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.lg, AppSpace.xl, AppSpace.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('My QR code', style: AppText.headlineMd()),
+            SizedBox(height: AppSpace.xs),
+            Text(
+              'Let someone scan this with their phone camera to open your profile in Richfield Connect.',
+              textAlign: TextAlign.center,
+              style: _muted,
+            ),
+            SizedBox(height: AppSpace.lg),
+            Container(
+              padding: EdgeInsets.all(AppSpace.md),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+              ),
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: PrettyQrView.data(
+                  data: link,
+                  decoration: const PrettyQrDecoration(
+                    shape: PrettyQrSmoothSymbol(color: Colors.black),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: AppSpace.md),
+            if (displayName.isNotEmpty) Text(displayName, style: AppText.labelLg()),
+            SizedBox(height: AppSpace.xs),
+            Text(link, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+            SizedBox(height: AppSpace.md),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: link));
+                if (!sheet.mounted) return;
+                Navigator.pop(sheet);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Profile link copied.')),
+                );
+              },
+              icon: Icon(Icons.copy_outlined, size: 18),
+              label: Text('Copy link'),
+            ),
+          ],
+        ),
+      ),
+    ));
+  }
+
+  Future<void> _openEditProfile() async {
+    final userId = widget.authService.currentUser?.id;
+    final profile = _profile;
+    if (userId == null || profile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Still loading your profile — try again in a moment.')),
+      );
+      return;
+    }
+
+    final updated = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => EditProfileScreen(
+          userId: userId,
+          profile: profile,
+          profileService: _profileService,
+          mediaService: _mediaService,
+        ),
+      ),
+    );
+
+    if (updated != null && mounted) setState(() => _profile = updated);
+  }
+
+  Future<void> _openCvImport() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
+    await Future.wait([_reloadProfile(), _loadPortfolio(), _loadCvStatus()]);
+  }
+
+  Future<void> _openLink(String? rawUrl, String label) async {
+    if (rawUrl == null || rawUrl.trim().isEmpty) {
+      // Prompt the user to add one instead of doing nothing at all.
+      await _openEditProfile();
+      return;
+    }
+    final uri = Uri.tryParse(ProfileService.normalizeUrl(rawUrl));
+    if (uri == null || !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open your $label link.')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        ListView(
-          padding: EdgeInsets.only(bottom: 90),
-          children: [
-            RichfieldHeader(
-              title: 'Portfolio',
-              subtitle: 'RICHFIELD VERIFIED',
-              extraAction: IconButton(
-                tooltip: 'Open student analytics',
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => StudentAnalyticsScreen()),
-                ),
-                icon: Icon(Icons.analytics_outlined),
+        RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+            padding: EdgeInsets.only(bottom: 90),
+            children: [
+              RichfieldHeader(
+                title: 'Portfolio',
+                subtitle: 'RICHFIELD VERIFIED',
+                extraAction: _hasCareerProfile
+                    ? IconButton(
+                        tooltip: 'Open student analytics',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => StudentAnalyticsScreen()),
+                        ),
+                        icon: Icon(Icons.analytics_outlined),
+                      )
+                    : null,
+                onAvatarTap: () => _openAccountMenu(context, widget.authService),
               ),
-              onAvatarTap: () => _openAccountMenu(context, widget.authService),
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _profileHeaderCard(),
-                  SizedBox(height: AppSpace.base),
-                  _statsRow(),
-                  SizedBox(height: AppSpace.base),
-                  _socialLinksRow(),
-                  SizedBox(height: AppSpace.md),
-                  PrimaryButton(
-                    label: 'Download Verified CV (PDF)',
-                    icon: Icons.file_download_outlined,
-                    onPressed: () {},
-                  ),
-                  SizedBox(height: AppSpace.sm),
-                  Row(
-                    children: [
-                      SecondaryButton(label: 'Share Profile', icon: Icons.ios_share),
-                      SizedBox(width: AppSpace.sm),
-                      SecondaryButton(label: 'Edit Details', icon: Icons.edit_outlined),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _profileHeaderCard(),
+                    SizedBox(height: AppSpace.base),
+                    _statsCard(),
+                    SizedBox(height: AppSpace.base),
+                    _socialLinksRow(),
+                    SizedBox(height: AppSpace.md),
+                    Row(
+                      children: [
+                        SecondaryButton(
+                          label: 'Edit Details',
+                          icon: Icons.edit_outlined,
+                          onPressed: _openEditProfile,
+                        ),
+                        if (_hasCareerProfile) ...[
+                          SizedBox(width: AppSpace.sm),
+                          SecondaryButton(
+                            label: 'Import CV',
+                            icon: Icons.upload_file_outlined,
+                            onPressed: _openCvImport,
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (_portfolioError != null) ...[
+                      SizedBox(height: AppSpace.md),
+                      Text(_portfolioError!, style: AppText.bodySm(color: AppColors.error)),
+                      TextButton(onPressed: _loadPortfolio, child: Text('Try again')),
                     ],
-                  ),
-                  SizedBox(height: AppSpace.xl),
-                  SectionHeader(title: 'Verified Credentials', trailing: '3 VERIFIED'),
-                  ...MockData.credentials.map((c) => _credentialTile(c)),
-                  SizedBox(height: AppSpace.lg),
-                  SectionHeader(title: 'Featured Code & Repositories', trailing: 'View All (14)'),
-                ],
+                    if (_hasCareerProfile && !_loadingPortfolio && _portfolioError == null)
+                      ..._careerSections(),
+                    SizedBox(height: AppSpace.lg),
+                    _activitySection(),
+                    SizedBox(height: AppSpace.xxl),
+                  ],
+                ),
               ),
-            ),
-            _repoCarousel(),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(height: AppSpace.lg),
-                  SectionHeader(title: 'Technical Endorsements', trailing: 'Endorse Sipho'),
-                  ...MockData.endorsements.map((e) => _endorsementRow(e)),
-                  SizedBox(height: AppSpace.lg),
-                  SectionHeader(title: 'Campus Leadership'),
-                  ...MockData.leadership.map((l) => _leadershipCard(l)),
-                  SizedBox(height: AppSpace.lg),
-                  SectionHeader(title: 'Academic Recommendations'),
-                  ...MockData.recommendations.map((r) => _recommendationCard(r)),
-                  SizedBox(height: AppSpace.lg),
-                  _recruiterVisibilityCard(),
-                  SizedBox(height: AppSpace.xxl),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
         Positioned(
           right: AppSpace.base,
@@ -3797,13 +5401,54 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     );
   }
 
-  void _openCareerAiSheet(BuildContext context) {
-    showModalBottomSheet(
+  /// The sheet doesn't navigate by itself — it pops with the screen the user
+  /// picked and this pushes it, so Portfolio knows when they come back from
+  /// the assistant or a CV import and can repaint from the database instead
+  /// of showing the pre-import headline until the next restart.
+  Future<void> _openCareerAiSheet(BuildContext context) async {
+    final next = await showModalBottomSheet<Widget>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => RichfieldCareerAiSheet(),
     );
+    if (next == null || !mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => next));
+    await Future.wait([_reloadProfile(), _loadPortfolio()]);
+  }
+
+  /// Uncached on purpose: AuthService.fetchOwnProfile() holds a 30-second
+  /// cache for the router, which would hand back the row from before the edit.
+  Future<void> _reloadProfile() async {
+    final userId = widget.authService.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final fresh = await _profileService.fetchProfile(userId);
+      if (mounted) setState(() => _profile = fresh);
+    } catch (_) {
+      // Keep what's on screen; a failed background refresh isn't worth an error.
+    }
+  }
+
+  /// Says what the account is. It used to read 'VERIFIED STUDENT •
+  /// @my.richfield.ac.za' on every account, businesses and staff included.
+  String? _roleBadge() => switch (_role) {
+        'student' => 'RICHFIELD STUDENT',
+        'alumni' => 'RICHFIELD ALUMNI',
+        'business' => 'BUSINESS PARTNER',
+        'administrator' => 'RICHFIELD STAFF',
+        _ => null,
+      };
+
+  String _educationLine() {
+    if (_portfolio.education.isEmpty) return '';
+    final e = _portfolio.education.first;
+    final graduation = e['graduation_year'];
+    return _joinParts([
+      e['programme'],
+      e['campus'],
+      if (graduation != null) 'Class of $graduation',
+    ]);
   }
 
   Widget _profileHeaderCard() {
@@ -3813,8 +5458,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final displayName = fullName.isEmpty ? 'Richfield Member' : fullName;
     final initials =
         (firstName.isNotEmpty ? firstName[0] : '') + (lastName.isNotEmpty ? lastName[0] : '');
-    final headline = _profile?['professional_headline'] as String? ??
-        'Final Year BSc IT Student | Full-Stack Developer & Cloud Enthusiast';
+    final headline = (_profile?['professional_headline'] as String?)?.trim() ?? '';
+    final bio = (_profile?['bio'] as String?)?.trim() ?? '';
+    final avatarPath = _profile?['avatar_path'] as String?;
+    final badge = _roleBadge();
+    final educationLine = _educationLine();
 
     return RoundedCard(
       child: Column(
@@ -3823,445 +5471,765 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 34,
-                    backgroundColor: AppColors.secondaryContainer,
-                    child: Text(initials.isEmpty ? '?' : initials,
-                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      padding: EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(Icons.photo_camera_outlined, size: 14, color: Colors.white),
+              // The whole avatar is the tap target — the camera badge on its
+              // own is below the minimum touch size.
+              GestureDetector(
+                onTap: _openEditProfile,
+                child: Stack(
+                  children: [
+                    CircleAvatar(
+                      radius: 34,
+                      backgroundColor: AppColors.secondaryContainer,
+                      backgroundImage: avatarPath == null || avatarPath.isEmpty
+                          ? null
+                          : NetworkImage(_mediaService.avatarUrl(avatarPath)),
+                      child: avatarPath == null || avatarPath.isEmpty
+                          ? Text(initials.isEmpty ? '?' : initials,
+                              style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.onSecondaryContainer))
+                          : null,
                     ),
-                  ),
-                ],
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.photo_camera_outlined,
+                            size: 14, color: AppColors.onPrimary),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               SizedBox(width: AppSpace.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Pill(
-                      text: 'VERIFIED STUDENT â€¢ @my.richfield.ac.za',
-                      background: AppColors.successGreenBg,
-                      foreground: AppColors.successGreen,
-                      icon: Icons.verified_user,
-                      fontSize: 9,
-                    ),
+                    if (badge != null)
+                      Pill(
+                        text: badge,
+                        background: AppColors.successGreenBg,
+                        foreground: AppColors.successGreen,
+                        icon: Icons.badge_outlined,
+                        fontSize: 9,
+                      ),
                     SizedBox(height: 6),
                     Text(displayName, style: AppText.headlineMd()),
-                    Text(headline,
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                    SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.location_on_outlined, size: 12, color: AppColors.primary),
-                        Text(' Braamfontein â€¢ \'25',
-                            style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                      ],
-                    ),
+                    if (headline.isNotEmpty)
+                      Text(headline, style: _muted)
+                    else if (_profile != null)
+                      GestureDetector(
+                        onTap: _openEditProfile,
+                        child: Text('Add a professional headline',
+                            style: AppText.bodySm(color: AppColors.secondary)),
+                      ),
+                    if (educationLine.isNotEmpty) ...[
+                      SizedBox(height: 4),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.school_outlined, size: 12, color: AppColors.primary),
+                          SizedBox(width: 4),
+                          Expanded(child: Text(educationLine, style: _muted)),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
+              IconButton(
+                tooltip: 'My QR code',
+                onPressed: _showMyQrCode,
+                icon: Icon(Icons.qr_code_2, color: AppColors.primary),
+              ),
             ],
           ),
-          SizedBox(height: AppSpace.sm),
-          Text(
-            'Specialising in distributed backend microservices and mobile application architecture.',
-            style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-          ),
+          if (bio.isNotEmpty) ...[
+            SizedBox(height: AppSpace.sm),
+            Text(bio, style: _muted),
+          ],
         ],
       ),
     );
   }
 
-  Widget _statsRow() {
+  /// Was '482' network, '18' endorsements, '94%' profile score and a 'Top 5%
+  /// Cohort' pill, identical on every account. Profile strength uses the same
+  /// ProfileContext as the Career AI sheet, so the two never disagree.
+  Widget _statsCard() {
     Widget stat(String value, String label) => Expanded(
           child: Column(
             children: [
               Text(value, style: AppText.headlineMd(color: AppColors.primary)),
-              Text(label, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+              Text(label, textAlign: TextAlign.center, style: _muted),
             ],
           ),
         );
+
+    final profile = _profile;
+    final profileContext = profile == null || _loadingPortfolio
+        ? null
+        : ProfileContext(
+            profile: profile,
+            skills: _portfolio.skills,
+            education: _portfolio.education,
+            workExperience: _portfolio.experience,
+            projects: _portfolio.projects,
+            certifications: _portfolio.certifications,
+          );
+    final next = profileContext?.nextStep;
+
     return RoundedCard(
       child: Column(
         children: [
           Row(
             children: [
-              stat('482', 'Network'),
-              stat('18', 'Endorsements'),
-              stat('94%', 'Profile Score'),
-            ],
-          ),
-          Divider(height: AppSpace.lg, color: AppColors.outlineVariant),
-          Row(
-            children: [
-              Icon(Icons.star, size: 14, color: AppColors.tertiaryFixedDim),
-              SizedBox(width: 4),
-              Text('Institutional Readiness', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-              Spacer(),
-              Pill(
-                text: 'Top 5% Cohort',
-                background: AppColors.tertiaryContainer.withOpacity(0.3),
-                foreground: AppColors.tertiary,
+              stat(_loadingPortfolio ? '—' : '${_portfolio.connectionCount}', 'Connections'),
+              stat(_loadingPortfolio ? '—' : '${_portfolio.endorsements.length}', 'Endorsements'),
+              stat(
+                profileContext == null ? '—' : '${(profileContext.completeness * 100).round()}%',
+                'Profile strength',
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _socialLinksRow() {
-    Widget link(IconData icon, String label) => Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14, color: AppColors.secondary),
-              SizedBox(width: 4),
-              Flexible(
-                child: Text(label,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.bodySm(color: AppColors.secondary)),
-              ),
-            ],
-          ),
-        );
-    return RoundedCard(
-      padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-      child: Row(
-        children: [
-          link(Icons.code, 'github.com/siphok'),
-          link(Icons.business_center_outlined, 'LinkedIn'),
-          link(Icons.workspace_premium_outlined, 'Credly'),
-        ],
-      ),
-    );
-  }
-
-  Widget _credentialTile(Credential c) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: AppSpace.sm),
-      child: RoundedCard(
-        child: Row(
-          children: [
-            Container(
-              padding: EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: c.iconBg.withOpacity(0.4),
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Icon(c.icon, color: c.iconColor),
-            ),
-            SizedBox(width: AppSpace.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          if (profileContext != null && _hasCareerProfile) ...[
+            Divider(height: AppSpace.lg, color: AppColors.outlineVariant),
+            InkWell(
+              onTap: () => _openCareerAiSheet(context),
+              child: Row(
                 children: [
-                  Text(c.title, style: AppText.labelLg()),
-                  Text(c.subtitle,
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  if (c.tag.isNotEmpty)
-                    Text(c.tag, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                ],
-              ),
-            ),
-            Icon(Icons.check_circle, color: AppColors.successGreen, size: 18),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _repoCarousel() {
-    return SizedBox(
-      height: 330,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(horizontal: AppSpace.base),
-        itemCount: MockData.repos.length,
-        separatorBuilder: (_, __) => SizedBox(width: AppSpace.sm),
-        itemBuilder: (_, i) {
-          final repo = MockData.repos[i];
-          return SizedBox(
-            width: 280,
-            child: RoundedCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Stack(
-                    children: [
-                      Container(
-                        height: 90,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [AppColors.secondary, AppColors.inverseSurface],
-                          ),
-                          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
-                        ),
-                        child: Center(
-                          child: Icon(Icons.terminal, color: Colors.white38, size: 36),
-                        ),
-                      ),
-                      Positioned(
-                        top: 8,
-                        left: 8,
-                        child: Pill(
-                          text: 'â˜… ${repo.stars}',
-                          background: Colors.black.withOpacity(0.5),
-                          foreground: Colors.white,
-                        ),
-                      ),
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Pill(
-                          text: repo.status,
-                          background: AppColors.successGreenBg,
-                          foreground: AppColors.successGreen,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(AppSpace.sm),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(repo.title, style: AppText.labelLg()),
-                        SizedBox(height: 2),
-                        Text(
-                          repo.description,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-                        ),
-                        SizedBox(height: 6),
-                        Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: repo.stack
-                              .map((t) => Pill(
-                                    text: t,
-                                    background: AppColors.surfaceContainerHigh,
-                                    foreground: AppColors.onSurfaceVariant,
-                                    fontSize: 9,
-                                  ))
-                              .toList(),
-                        ),
-                        SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            SizedBox(width: 126, child: OutlinedButton.icon(onPressed: () {}, icon: Icon(Icons.open_in_new, size: 14), label: Text('Live Demo', style: AppText.labelMd()))),
-                            SizedBox(width: 126, child: OutlinedButton.icon(onPressed: () {}, icon: Icon(Icons.code, size: 14), label: Text('View Source', style: AppText.labelMd()))),
-                          ],
-                        ),
-                      ],
+                  Icon(next == null ? Icons.verified_outlined : Icons.flag_outlined,
+                      size: 14, color: AppColors.tertiary),
+                  SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      next == null ? 'Every profile section is filled in' : 'Next step: ${next.label}',
+                      style: _muted,
                     ),
                   ),
+                  Pill(
+                    text: 'CAREER AI',
+                    icon: Icons.auto_awesome,
+                    background: AppColors.tertiaryContainer.withOpacity(0.3),
+                    foreground: AppColors.tertiary,
+                  ),
                 ],
               ),
             ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Was three hardcoded Text widgets — including the literal
+  /// 'github.com/siphok', a name from the mock data that showed on every
+  /// user's profile — with no tap target on any of them. Now reads the
+  /// real profile columns added in migration 024 and opens them.
+  Widget _socialLinksRow() {
+    final profile = _profile;
+
+    Widget link(IconData icon, String label, String? url) {
+      final hasUrl = url != null && url.trim().isNotEmpty;
+      final tint = hasUrl ? AppColors.secondary : AppColors.onSurfaceVariant;
+      return Expanded(
+        child: InkWell(
+          onTap: () => _openLink(url, label),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(hasUrl ? icon : Icons.add_link, size: 14, color: tint),
+                SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    hasUrl ? _prettyUrl(url) : 'Add $label',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.bodySm(color: tint),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return RoundedCard(
+      padding: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+      child: Row(
+        children: [
+          link(Icons.code, 'GitHub', profile?['github_url'] as String?),
+          link(Icons.business_center_outlined, 'LinkedIn',
+              profile?['linkedin_url'] as String?),
+          link(Icons.language, 'Website', profile?['website_url'] as String?),
+        ],
+      ),
+    );
+  }
+
+  /// 'https://github.com/reilisticdev' -> 'github.com/reilisticdev'.
+  /// Keeps the row readable at three-across without truncating to noise.
+  String _prettyUrl(String url) {
+    final stripped = url
+        .replaceFirst(RegExp(r'^https?://'), '')
+        .replaceFirst(RegExp(r'^www\.'), '');
+    return stripped.endsWith('/')
+        ? stripped.substring(0, stripped.length - 1)
+        : stripped;
+  }
+
+  String _joinParts(List<Object?> parts) => parts
+      .whereType<Object>()
+      .map((p) => p.toString().trim())
+      .where((p) => p.isNotEmpty)
+      .join(' • ');
+
+  String? _dateRange(Object? start, Object? end) {
+    final from = monthYearLabel(start);
+    final to = monthYearLabel(end);
+    if (from == null && to == null) return null;
+    return '${from ?? '?'} – ${to ?? 'Present'}';
+  }
+
+  String? _yearRange(Map<String, dynamic> row) {
+    final start = row['enrolment_year'];
+    final end = row['graduation_year'];
+    if (start == null && end == null) return null;
+    return '${start ?? '?'}–${end ?? 'present'}';
+  }
+
+  /// Every section below used to be MockData: an AWS certificate, two GitHub
+  /// repos with star counts, 'SRC Technology Officer', endorsement counts
+  /// under an 'Endorse Sipho' link and a lecturer's recommendation of
+  /// "Sipho" — the same on every account, with no way to add real ones.
+  List<Widget> _careerSections() {
+    final p = _portfolio;
+    return [
+      SizedBox(height: AppSpace.xl),
+      _cvEvidenceCard(),
+      SizedBox(height: AppSpace.lg),
+      _skillsSection(),
+      _entrySection(
+        section: PortfolioSection.experience,
+        title: 'Experience',
+        rows: p.experience,
+        empty: 'Internships, part-time work and volunteering all count.',
+        card: (row, onRemove) => _entryCard(
+          icon: Icons.work_outline,
+          title: row['title'] as String? ?? '',
+          subtitle: _joinParts([row['organisation'], _dateRange(row['start_date'], row['end_date'])]),
+          body: row['description'] as String?,
+          onRemove: onRemove,
+        ),
+      ),
+      _entrySection(
+        section: PortfolioSection.education,
+        title: 'Education',
+        rows: p.education,
+        empty: 'Add your programme so job matching and your programme comparison can use it.',
+        card: (row, onRemove) => _entryCard(
+          icon: Icons.school_outlined,
+          title: row['programme'] as String? ?? '',
+          subtitle: _joinParts([row['campus'], _yearRange(row)]),
+          onRemove: onRemove,
+        ),
+      ),
+      _entrySection(
+        section: PortfolioSection.projects,
+        title: 'Projects',
+        rows: p.projects,
+        empty: 'Coursework, hackathon and personal projects show recruiters what you can build.',
+        card: (row, onRemove) {
+          final source = (row['github_url'] as String?)?.trim() ?? '';
+          final live = (row['live_url'] as String?)?.trim() ?? '';
+          return _entryCard(
+            icon: Icons.terminal,
+            title: row['title'] as String? ?? '',
+            body: row['description'] as String?,
+            onRemove: onRemove,
+            actions: [
+              if (source.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openLink(source, 'source code'),
+                  icon: Icon(Icons.code, size: 16),
+                  label: Text('Source'),
+                ),
+              if (live.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openLink(live, 'live demo'),
+                  icon: Icon(Icons.open_in_new, size: 16),
+                  label: Text('Live demo'),
+                ),
+            ],
           );
         },
       ),
-    );
+      _entrySection(
+        section: PortfolioSection.certifications,
+        title: 'Certifications',
+        rows: p.certifications,
+        empty: 'Add certificates you have earned, with a link recruiters can check.',
+        card: (row, onRemove) {
+          final credential = (row['credential_url'] as String?)?.trim() ?? '';
+          return _entryCard(
+            icon: Icons.verified_outlined,
+            title: row['title'] as String? ?? '',
+            subtitle: _joinParts([row['issuer'], monthYearLabel(row['date_earned'])]),
+            onRemove: onRemove,
+            actions: [
+              if (credential.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openLink(credential, 'credential'),
+                  icon: Icon(Icons.open_in_new, size: 16),
+                  label: Text('View credential'),
+                ),
+            ],
+          );
+        },
+      ),
+      _entrySection(
+        section: PortfolioSection.badges,
+        title: 'Badges',
+        rows: p.badges,
+        empty: 'Digital badges from Credly, Microsoft Learn, Google, AWS and the like — with the link.',
+        card: (row, onRemove) {
+          final url = (row['credential_url'] as String?)?.trim() ?? '';
+          final isCredly = url.toLowerCase().contains('credly.com');
+          return _entryCard(
+            icon: Icons.military_tech_outlined,
+            title: row['title'] as String? ?? '',
+            subtitle: _joinParts([row['issuer'], monthYearLabel(row['date_earned'])]),
+            onRemove: onRemove,
+            actions: [
+              if (url.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openLink(url, 'badge'),
+                  icon: Icon(Icons.open_in_new, size: 16),
+                  label: Text(isCredly ? 'View on Credly' : 'View badge'),
+                ),
+            ],
+          );
+        },
+      ),
+      _entrySection(
+        section: PortfolioSection.achievements,
+        title: 'Achievements',
+        rows: p.achievements,
+        empty: "Awards, dean's list, competition placings, scholarships and hackathon wins.",
+        card: (row, onRemove) => _entryCard(
+          icon: Icons.emoji_events_outlined,
+          title: row['title'] as String? ?? '',
+          subtitle: monthYearLabel(row['date_earned']),
+          body: row['description'] as String?,
+          onRemove: onRemove,
+        ),
+      ),
+      _entrySection(
+        section: PortfolioSection.leadership,
+        title: 'Leadership',
+        rows: p.leadership,
+        empty: 'Class rep, society committee, SRC, tutoring or team lead roles.',
+        card: (row, onRemove) => _entryCard(
+          icon: Icons.groups_outlined,
+          title: row['role_title'] as String? ?? '',
+          subtitle: row['organisation'] as String?,
+          body: row['description'] as String?,
+          onRemove: onRemove,
+        ),
+      ),
+      _recommendationsSection(),
+    ];
   }
 
-  Widget _endorsementRow(EndorsementSkill e) {
+  Widget _skillsSection() {
+    final p = _portfolio;
+    final skills = [...p.skills]
+      ..sort((a, b) => p.endorsementsFor(b['id'] as String).compareTo(p.endorsementsFor(a['id'] as String)));
     return Padding(
-      padding: EdgeInsets.only(bottom: AppSpace.sm),
-      child: Row(
+      padding: EdgeInsets.only(bottom: AppSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Text(e.skill, style: AppText.labelLg()),
+          SectionHeader(
+            title: 'Skills & endorsements',
+            trailing: 'Suggest skills',
+            onTrailingTap: () => _openCareerAiSheet(context),
           ),
-          SizedBox(
-            width: 60,
-            height: 24,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: List.generate(
-                3,
-                (i) => Positioned(
-                  left: i * 14.0,
-                  top: 0,
-                  child: InitialsAvatar(
-                    initials: '+',
-                    radius: 11,
-                    background: e.accent.withOpacity(0.25),
-                    foreground: e.accent,
+          if (skills.isEmpty)
+            Text('No skills yet. Career AI can suggest skills for your programme, or pull them from your CV.',
+                style: _muted)
+          else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final s in skills)
+                  Chip(
+                    label: Text(p.endorsementsFor(s['id'] as String) == 0
+                        ? s['skill_name'] as String? ?? ''
+                        : '${s['skill_name']} • ${p.endorsementsFor(s['id'] as String)}'),
                   ),
-                ),
-              ),
+              ],
             ),
-          ),
-          SizedBox(width: AppSpace.sm),
-          Pill(
-            text: '${e.count}',
-            background: e.accent.withOpacity(0.15),
-            foreground: e.accent,
-          ),
+            SizedBox(height: AppSpace.xs),
+            Text(
+              p.endorsements.isEmpty
+                  ? 'Connections can endorse these from your profile.'
+                  : '${p.endorsements.length} endorsement${p.endorsements.length == 1 ? '' : 's'} from your network.',
+              style: _muted,
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _leadershipCard(LeadershipRole l) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: AppSpace.sm),
-      child: RoundedCard(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: l.iconBg.withOpacity(0.4),
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Icon(l.icon, color: AppColors.onSurface),
-            ),
-            SizedBox(width: AppSpace.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: Text(l.title, style: AppText.labelLg())),
-                      Text(l.period, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                    ],
-                  ),
-                  Text(l.org, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  SizedBox(height: 4),
-                  Text(l.description, style: AppText.bodySm()),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  /// "CV on file" evidence (rubric Section 3). The PDF lives in the private
+  /// cvs bucket; View mints a short-lived signed URL and hands it to the
+  /// system PDF viewer. Replace goes through the same CV import that
+  /// stored it.
+  Widget _cvEvidenceCard() {
+    final status = _cvStatus;
+    final path = status?.path;
+    final uploaded = status?.uploadedAt;
+    final hasCv = path != null;
 
-  Widget _recommendationCard(Recommendation r) {
     return RoundedCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (r.facultyEndorsed)
-            Padding(
-              padding: EdgeInsets.only(bottom: AppSpace.sm),
-              child: Pill(
-                text: 'Faculty Endorsed',
-                background: AppColors.secondaryContainer.withOpacity(0.4),
-                foreground: AppColors.secondary,
-              ),
-            ),
           Row(
             children: [
-              Icon(Icons.format_quote, color: AppColors.outline, size: 24),
-              SizedBox(width: 4),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: hasCv ? AppColors.primaryContainer : AppColors.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Icon(
+                  hasCv ? Icons.picture_as_pdf_outlined : Icons.upload_file_outlined,
+                  color: hasCv ? AppColors.onPrimaryContainer : AppColors.onSurfaceVariant,
+                ),
+              ),
+              SizedBox(width: AppSpace.sm),
               Expanded(
-                child: Text(
-                  r.quote,
-                  style: AppText.bodyMd().copyWith(fontStyle: FontStyle.italic),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(hasCv ? 'CV on file' : 'No CV on file', style: AppText.labelLg()),
+                    Text(
+                      hasCv
+                          ? (uploaded != null
+                              ? 'Uploaded ${monthYearLabel(uploaded.toIso8601String()) ?? ''} · private: only you and administrators can open it'
+                              : 'Private: only you and administrators can open it')
+                          : 'Import your CV to fill in your profile and keep the PDF here as evidence.',
+                      style: _muted,
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
           SizedBox(height: AppSpace.sm),
-          Text(r.name, style: AppText.labelLg()),
-          Text(r.title, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+          Wrap(
+            spacing: 4,
+            children: hasCv
+                ? [
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _openCv,
+                      icon: Icon(Icons.open_in_new, size: 16),
+                      label: Text('View'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _openCvImport,
+                      icon: Icon(Icons.autorenew, size: 16),
+                      label: Text('Replace'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cvBusy ? null : _removeCv,
+                      icon: Icon(Icons.delete_outline, size: 16, color: AppColors.error),
+                      label: Text('Remove', style: TextStyle(color: AppColors.error)),
+                    ),
+                  ]
+                : [
+                    TextButton.icon(
+                      onPressed: _openCvImport,
+                      icon: Icon(Icons.upload_file_outlined, size: 16),
+                      label: Text('Import my CV'),
+                    ),
+                  ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _recruiterVisibilityCard() {
-    return RoundedCard(
+  Widget _entrySection({
+    required PortfolioSection section,
+    required String title,
+    required List<Map<String, dynamic>> rows,
+    required String empty,
+    required Widget Function(Map<String, dynamic> row, VoidCallback onRemove) card,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.lg),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Recruiter Visibility', style: AppText.labelLg()),
-                    Text('Public Placement Showcase',
-                        style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                  ],
-                ),
-              ),
-              Switch(
-                value: _recruiterVisible,
-                onChanged: (v) => setState(() => _recruiterVisible = v),
-                activeColor: AppColors.primary,
-              ),
-            ],
-          ),
-          Text(
-            'Allow accredited partner recruiters to initiate direct interview offers.',
-            style: AppText.bodySm(color: AppColors.onSurfaceVariant),
-          ),
-          SizedBox(height: _compactDensity ? AppSpace.xs : AppSpace.sm),
-          Text('Display Density & View Experience', style: AppText.labelMd()),
-          SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => setState(() => _compactDensity = false),
-                  icon: Icon(Icons.wb_sunny_outlined, size: 16),
-                  label: Text('Comfortable', style: AppText.labelMd()),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: !_compactDensity ? AppColors.primary.withOpacity(.12) : null,
-                  ),
-                ),
-              ),
-              SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => setState(() => _compactDensity = true),
-                  icon: Icon(Icons.text_fields, size: 16),
-                  label: Text('Compact', style: AppText.labelMd()),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: _compactDensity ? AppColors.primary.withOpacity(.12) : null,
-                  ),
-                ),
-              ),
-            ],
-          ),
+          SectionHeader(title: title, trailing: '+ Add', onTrailingTap: () => _addEntry(section)),
+          if (rows.isEmpty)
+            Text(empty, style: _muted)
+          else
+            for (final row in rows) card(row, () => _removeEntry(section, row)),
         ],
       ),
+    );
+  }
+
+  Widget _entryCard({
+    required IconData icon,
+    required String title,
+    required VoidCallback onRemove,
+    String? subtitle,
+    String? body,
+    List<Widget> actions = const [],
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.sm),
+      child: RoundedCard(
+        padding: EdgeInsets.fromLTRB(AppSpace.md, AppSpace.md, AppSpace.xs, AppSpace.md),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              child: Icon(icon, size: 18, color: AppColors.secondary),
+            ),
+            SizedBox(width: AppSpace.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: AppText.labelLg()),
+                  if (subtitle != null && subtitle.isNotEmpty) Text(subtitle, style: _muted),
+                  if (body != null && body.trim().isNotEmpty) ...[
+                    SizedBox(height: 4),
+                    Text(body.trim(), style: AppText.bodySm()),
+                  ],
+                  if (actions.isNotEmpty) Wrap(spacing: 4, children: actions),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Remove',
+              onPressed: onRemove,
+              icon: Icon(Icons.delete_outline, size: 20, color: AppColors.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _recommendationsSection() {
+    final recommendations = _portfolio.recommendations;
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(title: 'Recommendations'),
+          if (recommendations.isEmpty)
+            Text('No recommendations yet. Alumni, lecturers and employers can write one from your profile.',
+                style: _muted)
+          else
+            for (final r in recommendations) _recommendationCard(r),
+        ],
+      ),
+    );
+  }
+
+  Widget _recommendationCard(Map<String, dynamic> r) {
+    final authorRow = r['author'];
+    final author = authorRow is Map
+        ? PersonSummary.fromRow({...Map<String, dynamic>.from(authorRow), 'id': r['author_id']})
+        : null;
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.sm),
+      child: RoundedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.format_quote, color: AppColors.outline),
+                SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    r['body'] as String? ?? '',
+                    style: AppText.bodyMd().copyWith(fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: AppSpace.sm),
+            Row(
+              children: [
+                ProfileAvatar(
+                  firstName: author?.firstName,
+                  lastName: author?.lastName,
+                  avatarPath: author?.avatarPath,
+                  radius: 14,
+                ),
+                SizedBox(width: AppSpace.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(author?.name ?? 'Former member', style: AppText.labelMd()),
+                      if ((author?.subtitle ?? '').isNotEmpty)
+                        Text(
+                          author!.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: _muted,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Posts and reposts. There was no activity section at all before, which
+  /// is why a repost never appeared anywhere on the reposter's profile.
+  Widget _activitySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(title: 'Posts & reposts'),
+        if (_loadingActivity)
+          Padding(
+            padding: EdgeInsets.all(AppSpace.lg),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_activityError != null) ...[
+          Text(_activityError!, style: AppText.bodySm(color: AppColors.error)),
+          TextButton(onPressed: _loadActivity, child: Text('Try again')),
+        ] else if (_activity.isEmpty)
+          Text('Nothing yet. Posts you share and posts you repost from the Feed appear here.', style: _muted)
+        else
+          for (final item in _activity)
+            Padding(
+              padding: EdgeInsets.only(bottom: AppSpace.base),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (item.isRepost)
+                    Padding(
+                      padding: EdgeInsets.only(left: AppSpace.xs, bottom: 4),
+                      child: Row(
+                        children: [
+                          Icon(Icons.repeat, size: 14, color: AppColors.onSurfaceVariant),
+                          SizedBox(width: 4),
+                          Text('You reposted', style: AppText.labelMd(color: AppColors.onSurfaceVariant)),
+                        ],
+                      ),
+                    ),
+                  item.post.type == FeedPostType.text
+                      ? _TextPostCard(
+                          post: item.post,
+                          onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
+                          onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
+                          onComment: item.post.id == null ? null : () => _openComments(item.post),
+                          onDelete: item.isRepost || item.post.id == null ? null : () => _deletePost(item),
+                        )
+                      : _VideoPostCard(
+                          post: item.post,
+                          onRepost: item.post.id == null ? null : () => _toggleRepost(item.post),
+                          onReact: item.post.id == null ? null : () => _toggleReaction(item.post),
+                          onComment: item.post.id == null ? null : () => _openComments(item.post),
+                          onDelete: item.isRepost || item.post.id == null ? null : () => _deletePost(item),
+                        ),
+                ],
+              ),
+            ),
+      ],
     );
   }
 }
 
 // =====================================================================
-// SECTION 12 â€” RICHFIELD CAREER AI SHEET (profile assistant)
+// SECTION 12 — RICHFIELD CAREER AI SHEET (profile assistant)
 // =====================================================================
 
-class RichfieldCareerAiSheet extends StatelessWidget {
+/// Entry point to Richfield Career AI from the Portfolio sparkle button.
+///
+/// Everything on this sheet used to be hardcoded: a 'PRO' badge, a
+/// '+65% REACH' stat with no source, a 'GitHub Sync Ready' feature that did
+/// not exist, and an 'NLP CV Parser' card describing an upload flow with no
+/// tap target. Profile strength and next steps now come from the user's real
+/// rows (ProfileContext), and every card opens something that works. It pops
+/// with the screen to open — see PortfolioScreen._openCareerAiSheet.
+class RichfieldCareerAiSheet extends StatefulWidget {
   RichfieldCareerAiSheet({super.key});
+
+  @override
+  State<RichfieldCareerAiSheet> createState() => _RichfieldCareerAiSheetState();
+}
+
+class _RichfieldCareerAiSheetState extends State<RichfieldCareerAiSheet> {
+  final _contextService = ProfileContextService(Supabase.instance.client);
+  ProfileContext? _ctx;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final ctx = await _contextService.load(userId);
+      if (mounted) setState(() => _ctx = ctx);
+    } catch (e) {
+      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
+    }
+  }
+
+  void _open(Widget screen) => Navigator.pop(context, screen);
+
+  String _strengthLabel(double completeness) {
+    final pct = (completeness * 100).round();
+    if (pct >= 100) return 'COMPLETE';
+    if (pct >= 70) return 'STRONG PROFILE';
+    if (pct >= 40) return 'GOOD START';
+    return 'JUST GETTING STARTED';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4271,6 +6239,8 @@ class RichfieldCareerAiSheet extends StatelessWidget {
       maxChildSize: 0.92,
       expand: false,
       builder: (context, scrollController) {
+        final ctx = _ctx;
+        final next = ctx?.nextStep;
         return Container(
           decoration: BoxDecoration(
             color: AppColors.surfaceContainerLowest,
@@ -4299,25 +6269,15 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                       color: AppColors.primary,
                       borderRadius: BorderRadius.circular(AppRadius.md),
                     ),
-                    child: Icon(Icons.smart_toy_outlined, color: Colors.white),
+                    child: Icon(Icons.smart_toy_outlined, color: AppColors.onPrimary),
                   ),
                   SizedBox(width: AppSpace.sm),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Text('Richfield Career AI', style: AppText.labelLg()),
-                            SizedBox(width: 6),
-                            Pill(
-                              text: 'PRO',
-                              background: AppColors.tertiaryContainer,
-                              foreground: AppColors.onTertiaryContainer,
-                            ),
-                          ],
-                        ),
-                        Text('Real-time Recruiter Benchmark Assistant',
+                        Text('Richfield Career AI', style: AppText.labelLg()),
+                        Text('Profile assistant powered by Google Gemini',
                             style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                       ],
                     ),
@@ -4329,116 +6289,82 @@ class RichfieldCareerAiSheet extends StatelessWidget {
                 ],
               ),
               SizedBox(height: AppSpace.base),
-              RoundedCard(
-                color: AppColors.surfaceContainerLow,
-                border: Border.all(color: Colors.transparent),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.bolt, color: AppColors.tertiary, size: 16),
-                            SizedBox(width: 4),
-                            Text('72% Profile Strength', style: AppText.labelLg()),
-                          ],
+              if (ctx == null && _error == null)
+                Padding(
+                  padding: EdgeInsets.all(AppSpace.xl),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              if (_error != null) Text(_error!, style: AppText.bodySm(color: AppColors.error)),
+              if (ctx != null) ...[
+                _strengthCard(ctx),
+                SizedBox(height: AppSpace.md),
+                if (next != null) ...[
+                  Text('NEXT STEPS', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+                  SizedBox(height: 6),
+                  ...ctx.steps.where((s) => !s.done).take(3).map(
+                        (step) => Padding(
+                          padding: EdgeInsets.only(bottom: AppSpace.sm),
+                          child: _actionCard(
+                            icon: Icons.flag_outlined,
+                            iconBg: AppColors.tertiaryContainer,
+                            title: step.label,
+                            body: step.why,
+                            cta: 'Ask AI',
+                            onTap: () => _open(AiAssistantScreen(initialMessage: step.prompt)),
+                          ),
                         ),
-                        Text('GOOD START â€¢ TOP 28%',
-                            style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-                      ],
-                    ),
-                    SizedBox(height: AppSpace.sm),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(AppRadius.full),
-                      child: LinearProgressIndicator(
-                        value: 0.72,
-                        minHeight: 8,
-                        backgroundColor: AppColors.surfaceContainerHigh,
-                        color: AppColors.primary,
+                      ),
+                ],
+                _actionCard(
+                  icon: Icons.description_outlined,
+                  iconBg: AppColors.secondaryContainer,
+                  title: 'Import from your CV',
+                  body: 'Upload your CV as a PDF, or paste it. AI extracts a headline, skills '
+                      'and education for you to review before anything is saved.',
+                  cta: 'Import',
+                  onTap: () => _open(CvImportScreen()),
+                ),
+                SizedBox(height: AppSpace.base),
+                Text('ASK THE ASSISTANT', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+                SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _queryChip('What do tech recruiters look for?'),
+                    _queryChip('How do I improve my profile?'),
+                    _queryChip('Which roles fit my skills?'),
+                  ],
+                ),
+                SizedBox(height: AppSpace.base),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _open(AiAssistantScreen()),
+                        style: OutlinedButton.styleFrom(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          side: BorderSide(color: AppColors.outlineVariant),
+                        ),
+                        child: Text('Open chat', style: AppText.labelLg()),
                       ),
                     ),
-                    SizedBox(height: AppSpace.sm),
-                    Text(
-                      'Complete 2 more AI recommendations to unlock Verified Top Scholar status.',
-                      style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                    SizedBox(width: AppSpace.sm),
+                    Expanded(
+                      flex: 2,
+                      child: PrimaryButton(
+                        label: next == null ? 'Review my profile' : 'Start guided setup',
+                        icon: Icons.auto_awesome,
+                        onPressed: () => _open(next == null
+                            ? AiAssistantScreen(
+                                initialMessage:
+                                    'Review my profile and tell me what would make it stand out more.')
+                            : AiAssistantScreen(guided: true)),
+                      ),
                     ),
                   ],
                 ),
-              ),
-              SizedBox(height: AppSpace.md),
-              _suggestionCard(
-                icon: Icons.lightbulb_outline,
-                iconBg: AppColors.tertiaryContainer,
-                title: 'Quick Win',
-                tag: '+65% REACH',
-                tagColor: AppColors.successGreen,
-                body: 'Adding 3 more technical skills increases recruiter discoverability by 65% for enterprise software internships.',
-                chips: ['+ Docker', '+ TypeScript', '+ PostgreSQL'],
-              ),
-              SizedBox(height: AppSpace.sm),
-              _suggestionCard(
-                icon: Icons.code,
-                iconBg: AppColors.secondaryContainer,
-                title: 'GitHub Sync Ready',
-                tag: 'AUTOMATED',
-                tagColor: AppColors.secondary,
-                body: 'Sync your top 2 pinned repositories to automatically generate verified project showcase cards with test coverage scores.',
-              ),
-              SizedBox(height: AppSpace.sm),
-              _suggestionCard(
-                icon: Icons.description_outlined,
-                iconBg: AppColors.onPrimaryContainer,
-                title: 'NLP CV Parser',
-                tag: 'FAST-TRACK',
-                tagColor: AppColors.primary,
-                body: 'Upload your resume PDF and let our AI auto-fill your coursework, graduation thesis, and previous internships in seconds.',
-              ),
-              SizedBox(height: AppSpace.base),
-              Text('INSTANT AI QUERIES', style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
-              SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _queryChip('What do tech recruiters look for?'),
-                  _queryChip('How do I improve my profile?'),
-                ],
-              ),
-              SizedBox(height: AppSpace.base),
-              OutlinedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => AiProfileInputScreen()));
-                },
-                icon: Icon(Icons.edit_note_outlined),
-                label: Text('Open AI Profile Builder'),
-              ),
-              SizedBox(height: AppSpace.sm),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 14),
-                        side: BorderSide(color: AppColors.outlineVariant),
-                      ),
-                      child: Text('Dismiss', style: AppText.labelLg()),
-                    ),
-                  ),
-                  SizedBox(width: AppSpace.sm),
-                  Expanded(
-                    flex: 2,
-                    child: PrimaryButton(
-                      label: 'Apply AI Suggestions',
-                      icon: Icons.auto_awesome,
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ),
-                ],
-              ),
+              ],
             ],
           ),
         );
@@ -4446,85 +6372,102 @@ class RichfieldCareerAiSheet extends StatelessWidget {
     );
   }
 
-  Widget _suggestionCard({
+  Widget _strengthCard(ProfileContext ctx) {
+    final pct = (ctx.completeness * 100).round();
+    final missing = ctx.steps.length - ctx.doneCount;
+    return RoundedCard(
+      color: AppColors.surfaceContainerLow,
+      border: Border.all(color: Colors.transparent),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bolt, color: AppColors.tertiary, size: 16),
+              SizedBox(width: 4),
+              Text('$pct% Profile Strength', style: AppText.labelLg()),
+              Spacer(),
+              Text(_strengthLabel(ctx.completeness),
+                  style: AppText.labelBadge(color: AppColors.onSurfaceVariant)),
+            ],
+          ),
+          SizedBox(height: AppSpace.sm),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.full),
+            child: LinearProgressIndicator(
+              value: ctx.completeness,
+              minHeight: 8,
+              backgroundColor: AppColors.surfaceContainerHigh,
+              color: AppColors.primary,
+            ),
+          ),
+          SizedBox(height: AppSpace.sm),
+          Text(
+            missing == 0
+                ? 'Every setup step is done — nice work.'
+                : '${ctx.doneCount} of ${ctx.steps.length} setup steps done, $missing to go.',
+            style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionCard({
     required IconData icon,
     required Color iconBg,
     required String title,
-    required String tag,
-    required Color tagColor,
     required String body,
-    List<String>? chips,
+    required String cta,
+    required VoidCallback onTap,
   }) {
-    return RoundedCard(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: iconBg.withOpacity(0.4),
-              borderRadius: BorderRadius.circular(AppRadius.md),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.xl),
+      child: RoundedCard(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: iconBg.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              child: Icon(icon, size: 18, color: AppColors.onSurface),
             ),
-            child: Icon(icon, size: 18, color: AppColors.onSurface),
-          ),
-          SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(title, style: AppText.labelLg()),
-                    Text(tag, style: AppText.labelBadge(color: tagColor)),
-                  ],
-                ),
-                SizedBox(height: 4),
-                Text(body, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-                if (chips != null) ...[
-                  SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: chips
-                        .map((c) => Pill(
-                              text: c,
-                              background: AppColors.surfaceContainerHigh,
-                              foreground: AppColors.onSurfaceVariant,
-                            ))
-                        .toList(),
-                  ),
+            SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: AppText.labelLg()),
+                  SizedBox(height: 2),
+                  Text(body, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
+            SizedBox(width: AppSpace.sm),
+            Text(cta, style: AppText.labelMd(color: AppColors.primary)),
+          ],
+        ),
       ),
     );
   }
 
   Widget _queryChip(String text) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(AppRadius.full),
-        border: Border.all(color: AppColors.outlineVariant),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
-          SizedBox(width: 6),
-          Text(text, style: AppText.bodySm()),
-        ],
-      ),
+    return ActionChip(
+      avatar: Icon(Icons.chat_bubble_outline, size: 14, color: AppColors.onSurfaceVariant),
+      label: Text(text, style: AppText.bodySm()),
+      onPressed: () => _open(AiAssistantScreen(initialMessage: text)),
+      backgroundColor: AppColors.surfaceContainerLow,
+      side: BorderSide(color: AppColors.outlineVariant),
     );
   }
 }
 
 // =====================================================================
-// SECTION 13 â€” ONBOARDING TOUR OVERLAY
+// SECTION 13 — ONBOARDING TOUR OVERLAY
 // Simplified coach-mark sequence. In production, anchor each step to the
 // real widget's position with a GlobalKey + RenderBox instead of the
 // fixed offsets used here.
@@ -4543,7 +6486,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
   static final _steps = [
     (
       title: 'STEP 1 OF 4: WELCOME',
-      body: "This is your Portfolio â€” think of it as your always-on digital CV. Recruiters see this before they see you.",
+      body: "This is your Portfolio — think of it as your always-on digital CV. Recruiters see this before they see you.",
       top: 0.18,
     ),
     (
@@ -4553,7 +6496,7 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
     ),
     (
       title: 'STEP 3 OF 4: LET AI DO THE WORK',
-      body: "Tap the sparkle button any time to open Richfield Career AI â€” it reviews your profile and suggests the fastest ways to get noticed.",
+      body: "Tap the sparkle button any time to open Richfield Career AI — it reviews your profile and suggests the fastest ways to get noticed.",
       top: 0.5,
     ),
     (
@@ -4658,5 +6601,3 @@ class _OnboardingTourOverlayState extends State<OnboardingTourOverlay> {
     );
   }
 }
-
-

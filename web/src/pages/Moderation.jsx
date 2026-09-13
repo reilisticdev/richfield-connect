@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+// Reports store only an id, so the queue loads the reported post or comment
+// itself; the decision should be made on the content, not on "post #1a2b3c4d".
+const preview = (text) => {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return "(no text: image or video only)";
+  return trimmed.length > 160 ? `${trimmed.slice(0, 160)}…` : trimmed;
+};
+
+const contentLabel = (type) =>
+  type === "comment" ? "Comment" : type === "video" ? "Video post" : "Post";
+
 function Moderation() {
   const [businesses, setBusinesses] = useState([]);
   const [loadingBusinesses, setLoadingBusinesses] = useState(true);
@@ -16,8 +27,10 @@ function Moderation() {
   const fetchPendingBusinesses = async () => {
     setLoadingBusinesses(true);
 
+    // admin_profiles (migration 037): the only API path that still returns
+    // email, and only to administrators.
     const { data, error } = await supabase
-      .from("profiles")
+      .from("admin_profiles")
       .select(
         "id, first_name, last_name, email, account_status, business_profiles(company_name)"
       )
@@ -40,7 +53,9 @@ function Moderation() {
     const { data, error } = await supabase
       .from("verification_claims")
       .select(
-        "id, student_number, programme, campus, graduation_year, status, profiles(first_name, last_name, email)"
+        // `profiles:` aliases the admin_profiles embed so the JSX below keeps
+        // reading claim.profiles.* unchanged.
+        "id, student_number, programme, campus, graduation_year, status, profiles:admin_profiles(first_name, last_name, email)"
       )
       .eq("status", "pending");
 
@@ -60,17 +75,56 @@ function Moderation() {
     const { data, error } = await supabase
       .from("content_reports")
       .select(
-        "id, content_id, content_type, reason, status, profiles(first_name, last_name)"
+        "id, content_id, content_type, reason, status, created_at, profiles(first_name, last_name)"
       )
-      .eq("status", "pending");
+      .eq("status", "pending")
+      .order("created_at", { ascending: true });
 
     if (error) {
       console.error("Error fetching flagged content:", error);
       setFlaggedContent([]);
-    } else {
-      setFlaggedContent(data || []);
+      setLoadingFlagged(false);
+      return;
     }
 
+    const reports = data || [];
+    const postIds = reports
+      .filter((report) => report.content_type !== "comment")
+      .map((report) => report.content_id);
+    const commentIds = reports
+      .filter((report) => report.content_type === "comment")
+      .map((report) => report.content_id);
+
+    const [posts, comments] = await Promise.all([
+      postIds.length
+        ? supabase
+            .from("posts")
+            .select("id, body, profiles(first_name, last_name)")
+            .in("id", postIds)
+        : Promise.resolve({ data: [] }),
+      commentIds.length
+        ? supabase
+            .from("comments")
+            .select("id, body, profiles(first_name, last_name)")
+            .in("id", commentIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    if (posts.error || comments.error) {
+      console.error("Error loading reported content:", posts.error || comments.error);
+    }
+
+    const targets = new Map();
+    [...(posts.data || []), ...(comments.data || [])].forEach((item) =>
+      targets.set(item.id, item)
+    );
+
+    setFlaggedContent(
+      reports.map((report) => ({
+        ...report,
+        target: targets.get(report.content_id) ?? null,
+      }))
+    );
     setLoadingFlagged(false);
   };
 
@@ -135,21 +189,56 @@ function Moderation() {
     setAlumni((current) => current.filter((person) => person.id !== id));
   };
 
-  const updateContentStatus = async (id, status) => {
+  // Closes every pending report about the same item, not just the row clicked.
+  const closeReports = async (report, status) => {
     const { error } = await supabase
       .from("content_reports")
       .update({ status })
-      .eq("id", id);
+      .eq("content_id", report.content_id)
+      .eq("status", "pending");
 
     if (error) {
-      console.error("Error updating flagged content:", error);
-      setError("Could not update flagged content.");
-      return;
+      console.error("Error updating reports:", error);
+      return false;
     }
 
     setFlaggedContent((current) =>
-      current.filter((content) => content.id !== id)
+      current.filter((item) => item.content_id !== report.content_id)
     );
+    return true;
+  };
+
+  const keepContent = async (report) => {
+    if (!(await closeReports(report, "dismissed"))) {
+      setError("Could not update flagged content.");
+    }
+  };
+
+  const removeContent = async (report) => {
+    const noun = contentLabel(report.content_type).toLowerCase();
+
+    if (report.target) {
+      if (!window.confirm(`Remove this ${noun} for everyone? This can't be undone.`)) {
+        return;
+      }
+
+      const table = report.content_type === "comment" ? "comments" : "posts";
+      const { data: removed, error: deleteError } = await supabase
+        .from(table)
+        .delete()
+        .eq("id", report.content_id)
+        .select("id");
+
+      if (deleteError || !removed?.length) {
+        console.error("Error removing content:", deleteError);
+        setError(`Could not remove the ${noun}.`);
+        return;
+      }
+    }
+
+    if (!(await closeReports(report, "actioned"))) {
+      setError(`The ${noun} was removed, but its reports could not be closed.`);
+    }
   };
 
   return (
@@ -327,7 +416,10 @@ function Moderation() {
         <div className="section-header">
           <div>
             <h2>Flagged Content</h2>
-            <p>Review content that has been reported or flagged.</p>
+            <p>
+              Posts and comments members reported from the app. Remove deletes
+              the content for everyone; Keep closes the report.
+            </p>
           </div>
 
           <span className="count-badge">
@@ -359,9 +451,16 @@ function Moderation() {
               <div className="table-row" key={content.id}>
                 <div>
                   <strong>
-                    {content.content_type} #{content.content_id.slice(0, 8)}
+                    {content.target
+                      ? preview(content.target.body)
+                      : "Already deleted"}
                   </strong>
-                  <small>Community {content.content_type}</small>
+                  <small>
+                    {contentLabel(content.content_type)}
+                    {content.target?.profiles
+                      ? ` by ${content.target.profiles.first_name} ${content.target.profiles.last_name}`
+                      : ""}
+                  </small>
                 </div>
 
                 <div>
@@ -375,14 +474,14 @@ function Moderation() {
                 <div className="action-buttons">
                   <button
                     className="approve-button"
-                    onClick={() => updateContentStatus(content.id, "dismissed")}
+                    onClick={() => keepContent(content)}
                   >
                     Keep
                   </button>
 
                   <button
                     className="reject-button"
-                    onClick={() => updateContentStatus(content.id, "actioned")}
+                    onClick={() => removeContent(content)}
                   >
                     Remove
                   </button>
