@@ -40,6 +40,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'config/supabase_config.dart';
+import 'screens/admin_moderation_screen.dart';
 import 'screens/edit_profile_screen.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/privacy_settings_screen.dart';
@@ -2180,7 +2181,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   SizedBox(width: AppSpace.sm),
                   Expanded(
                     child: Text(
-                      'Approvals, moderation and announcements are handled in the Richfield Connect web admin console.',
+                      'Business approvals, member suspensions and post removal are in the Moderation tab. '
+                      'Broadcasting announcements is still web-console only.',
                       style: AppText.bodyMd(),
                     ),
                   ),
@@ -2761,11 +2763,18 @@ class AdminHubScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Column(
         children: [
-          TabBar(tabs: [Tab(text: 'Feed'), Tab(text: 'Reports')], labelColor: AppColors.primary),
-          Expanded(child: TabBarView(children: [FeedScreen(), AdminDashboardScreen()])),
+          TabBar(
+            tabs: [Tab(text: 'Feed'), Tab(text: 'Reports'), Tab(text: 'Moderation')],
+            labelColor: AppColors.primary,
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [FeedScreen(), AdminDashboardScreen(), AdminModerationScreen()],
+            ),
+          ),
         ],
       ),
     );
@@ -2996,6 +3005,11 @@ class _FeedScreenState extends State<FeedScreen> {
 
   /// profiles.role of the signed-in member; drives FeedRanker.
   String _viewerRole = '';
+
+  /// Administrators can delete anyone's post here too - "Author manages own
+  /// posts" RLS explicitly also allows is_admin(auth.uid()), so this is
+  /// just widening who sees the existing ••• "Delete post" option.
+  bool get _isAdmin => _viewerRole == 'administrator';
 
   /// The same posts in plain created_at order, for the 'Newest first' chip.
   List<FeedPost> _postsNewest = [];
@@ -3341,7 +3355,8 @@ class _FeedScreenState extends State<FeedScreen> {
                           onReport: post.id == null || post.authorId == _authService.currentUser?.id
                               ? null
                               : () => _reportPost(post),
-                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                          onDelete: post.id != null &&
+                                  (post.authorId == _authService.currentUser?.id || _isAdmin)
                               ? () => _deletePost(post)
                               : null,
                         )
@@ -3353,7 +3368,8 @@ class _FeedScreenState extends State<FeedScreen> {
                           onReport: post.id == null || post.authorId == _authService.currentUser?.id
                               ? null
                               : () => _reportPost(post),
-                          onDelete: post.id != null && post.authorId == _authService.currentUser?.id
+                          onDelete: post.id != null &&
+                                  (post.authorId == _authService.currentUser?.id || _isAdmin)
                               ? () => _deletePost(post)
                               : null,
                         ),
