@@ -142,8 +142,8 @@ function Dashboard() {
       <div className="dashboard-section">
         <h2>Platform Overview</h2>
         <p>
-          Analytics and engagement information will appear here once the
-          dashboard is connected to the Richfield Connect database.
+          Monitor users, opportunities, events, announcements and other
+          activity across the Richfield Connect platform.
         </p>
       </div>
     </div>

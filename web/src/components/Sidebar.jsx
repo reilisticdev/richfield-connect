@@ -1,8 +1,15 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useEffect, useState } from "react";
 
 function Sidebar() {
   const navigate = useNavigate();
+
+  const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+  document.documentElement.classList.toggle("dark", darkMode);
+  }, [darkMode]);
 
   const handleSignOut = async () => {
     const { error } = await supabase.auth.signOut();
@@ -57,8 +64,16 @@ function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={() => setDarkMode((current) => !current)}
+       >
+        {darkMode ? "☀ Light Mode" : "☾ Dark Mode"}
+        </button>
+
         <button type="button" onClick={handleSignOut}>
-          Sign Out
+           Sign Out
         </button>
       </div>
     </aside>
