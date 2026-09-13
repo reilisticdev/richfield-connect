@@ -20,15 +20,15 @@ function formatLabel(value) {
 
 const ROLE_COLORS = {
   student: "#2563eb",
-  alumni: "#7c3aed",
-  business: "#f59e0b",
-  administrator: "#0f172a",
+  alumni: "#8b5cf6",
+  business: "#14b8a6",
+  administrator: "#334155",
 };
 
 const STATUS_COLORS = {
-  active: "#16a34a",
+  active: "#22c55e",
   pending: "#f59e0b",
-  suspended: "#dc2626",
+  suspended: "#ef4444",
   rejected: "#64748b",
 };
 
@@ -109,26 +109,34 @@ function Analytics() {
 
   return (
     <div className="admin-page">
-      <div className="page-header">
-        <div>
-          <h1>Platform Analytics</h1>
-          <p>
-            Real-time breakdown of users, business accounts, and content on
-            Richfield Connect.
+      <div className="analytics-header">
+         <div>
+           <h1>Platform Analytics</h1>
+           <p>
+           Real-time overview of users, business accounts, and platform activity.
           </p>
-        </div>
-      </div>
+     </div>
+
+  <div className="analytics-live">
+    <span className="analytics-live-dot"></span>
+    Live data
+  </div>
+</div>
 
       {error && <p className="form-error">{error}</p>}
 
       <div className="charts-grid">
         <section className="admin-section chart-card">
           <div className="section-header">
-            <div>
-              <h2>Total Users by Role</h2>
-              <p>Every registered profile, grouped by account type.</p>
-            </div>
-          </div>
+           <div>
+             <h2>Total Users by Role</h2>
+             <p>Every registered profile, grouped by account type.</p>
+           </div>
+
+           <strong className="chart-summary">
+            {userCounts.reduce((sum, item) => sum + item.value, 0)}
+           </strong>
+        </div>
 
           <div className="chart-body">
             {loading ? (
@@ -150,8 +158,24 @@ function Analytics() {
                       <Cell key={entry.name} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--chart-tooltip-bg)",
+                      border: "1px solid var(--chart-tooltip-border)",
+                      borderRadius: "10px",
+                      boxShadow: "0 8px 20px rgba(15, 23, 42, 0.08)",
+                    }}
+                 />
+                  <Legend
+                     verticalAlign="bottom"
+                     height={36}
+                     iconType="circle"
+                     wrapperStyle={{
+                     fontSize: "13px",
+                     color: "var(--chart-axis)",
+                     paddingTop: "10px",
+                     }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -174,10 +198,26 @@ function Analytics() {
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={businessStatus}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 13, fill: "#64748b" }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 13, fill: "#64748b" }} />
-                  <Tooltip />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="var(--chart-grid)"
+                    vertical={false}
+                  />
+                  <XAxis dataKey="name" tick={{ fontSize: 13, fill: "var(--chart-axis)" }} />
+                  <YAxis
+                     allowDecimals={false}
+                     tick={{ fontSize: 12, fill: "var(--chart-axis)" }}
+                     axisLine={false}
+                     tickLine={false}
+                  />
+                 <Tooltip
+                    contentStyle={{
+                     backgroundColor: "var(--chart-tooltip-bg)",
+                     border: "1px solid var(--chart-tooltip-border)",
+                     borderRadius: "10px",
+                     boxShadow: "0 8px 20px rgba(15, 23, 42, 0.08)",
+                   }}
+                  />
                   <Bar dataKey="total" radius={[6, 6, 0, 0]}>
                     {businessStatus.map((entry) => (
                       <Cell key={entry.name} fill={entry.color} />
@@ -203,11 +243,27 @@ function Analytics() {
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={engagement}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 13, fill: "#64748b" }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 13, fill: "#64748b" }} />
-                  <Tooltip />
-                  <Bar dataKey="total" fill="#2563eb" radius={[6, 6, 0, 0]} />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="var(--chart-grid)"
+                    vertical={false}
+                  />
+                  <XAxis dataKey="name" tick={{ fontSize: 13, fill: "var(--chart-axis)" }} />
+                  <YAxis
+                     allowDecimals={false}
+                     tick={{ fontSize: 12, fill: "var(--chart-axis)" }}
+                     axisLine={false}
+                     tickLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--chart-tooltip-bg)",
+                      border: "1px solid var(--chart-tooltip-border)",
+                      borderRadius: "10px",
+                      boxShadow: "0 8px 20px rgba(15, 23, 42, 0.08)",
+                    }}
+                  />
+                  <Bar dataKey="total" fill="var(--chart-bar)" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
