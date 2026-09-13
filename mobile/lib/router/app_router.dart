@@ -56,12 +56,6 @@ GoRouter buildAppRouter(AuthService authService) {
         return isGoingToAuth ? null : '/login';
       }
 
-      final user = authService.currentUser!;
-      final requiresMfaSetup = user.appMetadata['requires_mfa_setup'] == true;
-      if (requiresMfaSetup && state.matchedLocation != '/mfa-setup') {
-        return '/mfa-setup';
-      }
-
       // Signed in from a password-reset link/code: finish that first.
       if (authService.recoveryPending && state.matchedLocation != '/reset-password') {
         return '/reset-password';
@@ -143,7 +137,6 @@ GoRouter buildAppRouter(AuthService authService) {
         ),
       ),
       GoRoute(path: '/signup', builder: (context, state) => RegisterScreen(authService: authService)),
-      GoRoute(path: '/mfa-setup', builder: (context, state) => const MfaSetupScreenPlaceholder()),
       GoRoute(
         path: '/reset-password',
         builder: (context, state) => ResetPasswordScreen(authService: authService),
@@ -232,10 +225,6 @@ class _PlaceholderScreen extends StatelessWidget {
   final String label;
   @override
   Widget build(BuildContext context) => Scaffold(body: Center(child: Text(label)));
-}
-
-class MfaSetupScreenPlaceholder extends _PlaceholderScreen {
-  const MfaSetupScreenPlaceholder() : super('Set up MFA');
 }
 
 /// Where a signed-in account that isn't active lands: waiting for approval,

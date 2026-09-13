@@ -37,10 +37,6 @@
  *   - Refuses to run if an administrator profile already exists, unless
  *     --force is passed. This script is meant to run exactly once.
  *   - Does NOT print the password back out. Rotate it after first login.
- *   - Sets app_metadata.requires_mfa_setup = true so the app can force an
- *     MFA enrollment screen before granting access to any admin route.
- *     There is no Admin API to enroll a TOTP factor without the user's own
- *     session, so this flag is how you enforce it at the app layer.
  */
 
 import "dotenv/config";
@@ -106,9 +102,6 @@ async function main() {
       last_name: ADMIN_LAST_NAME,
       // role intentionally omitted
     },
-    app_metadata: {
-      requires_mfa_setup: true,
-    },
   });
 
   if (createError || !created?.user) {
@@ -152,10 +145,7 @@ async function main() {
   console.log(
     "\nDone. Next steps:\n" +
     "  1. Have this person log in with the temporary password and change it immediately.\n" +
-    "  2. Your app must check app_metadata.requires_mfa_setup on login and force an\n" +
-    "     MFA enrollment screen (supabase.auth.mfa.enroll) before allowing access to any\n" +
-    "     admin route. Clear the flag only after a factor is verified.\n" +
-    "  3. Delete or rotate SUPABASE_SERVICE_ROLE_KEY from your local shell history/.env\n" +
+    "  2. Delete or rotate SUPABASE_SERVICE_ROLE_KEY from your local shell history/.env\n" +
     "     once this is done — it should not sit around after bootstrap.\n"
   );
 }
