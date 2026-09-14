@@ -84,6 +84,8 @@ import 'services/connections_service.dart' show PersonSummary;
 import 'screens/portfolio_entry_sheet.dart';
 import 'widgets/profile_avatar.dart';
 import 'widgets/time_labels.dart' show eventDateLabel, monthYearLabel;
+import 'services/current_user_profile.dart';
+import 'widgets/share_to_connection_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -134,11 +136,19 @@ void main() async {
   // onError: a failed deep-link code exchange (confirmation link opened on
   // the wrong device, or used twice) is delivered as an error on this
   // stream; without a handler it was an "Unhandled Exception" in logcat.
+  //
+  // CurrentUserProfile rides the same hook: it's what feeds RichfieldHeader's
+  // avatar, and needs refreshing on exactly the same events (sign-in fills
+  // it in, sign-out must clear it back to the generic icon).
   Supabase.instance.client.auth.onAuthStateChange.listen(
-    (_) => unawaited(PushNotificationService.syncTokenIfSignedIn()),
+    (_) {
+      unawaited(PushNotificationService.syncTokenIfSignedIn());
+      unawaited(CurrentUserProfile.refresh());
+    },
     onError: (_) {},
   );
   unawaited(PushNotificationService.syncTokenIfSignedIn());
+  unawaited(CurrentUserProfile.refresh());
 
   runApp(RichfieldConnectApp(authService: authService));
 }
@@ -491,6 +501,12 @@ class FeedPost {
   /// profiles.role value the ranker keys on.
   final String authorRole;
   final String authorRoleKey;
+
+  /// profiles.avatar_path for the author, resolved through ProfileAvatar the
+  /// same way every other member-photo spot in the app does. Was selected by
+  /// FeedService's queries all along but dropped here, so every post card
+  /// fell back to initials even when the author had a real photo uploaded.
+  final String? authorAvatarPath;
   final DateTime createdAt;
   final bool verified;
   final String timeAgo;
@@ -515,6 +531,7 @@ class FeedPost {
     required this.authorName,
     required this.authorRole,
     this.authorRoleKey = '',
+    this.authorAvatarPath,
     DateTime? createdAt,
     required this.verified,
     required this.timeAgo,
@@ -546,6 +563,7 @@ class FeedPost {
       authorName: authorName,
       authorRole: authorRole,
       authorRoleKey: authorRoleKey,
+      authorAvatarPath: authorAvatarPath,
       createdAt: createdAt,
       verified: verified,
       timeAgo: timeAgo,
@@ -592,6 +610,7 @@ FeedPost _feedPostFromRow(
     authorName: name.isEmpty ? 'Richfield Member' : name,
     authorRole: role == null || role.isEmpty ? '' : role[0].toUpperCase() + role.substring(1),
     authorRoleKey: role ?? '',
+    authorAvatarPath: profile?['avatar_path'] as String?,
     createdAt: createdAt,
     verified: true,
     timeAgo: _timeAgo(createdAt),
@@ -964,12 +983,24 @@ class RichfieldHeader extends StatelessWidget {
               color: AppColors.onSurface,
             ),
           ),
+          // Was a hardcoded person-icon circle regardless of who was signed
+          // in or whether they had a photo — see CurrentUserProfile.
           GestureDetector(
             onTap: onAvatarTap,
-            child: CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.primary,
-              child: Icon(Icons.person, size: 18, color: AppColors.onPrimary),
+            child: ValueListenableBuilder<CurrentUserProfileData?>(
+              valueListenable: CurrentUserProfile.data,
+              builder: (context, me, _) => me == null
+                  ? CircleAvatar(
+                      radius: 16,
+                      backgroundColor: AppColors.primary,
+                      child: Icon(Icons.person, size: 18, color: AppColors.onPrimary),
+                    )
+                  : ProfileAvatar(
+                      firstName: me.firstName,
+                      lastName: me.lastName,
+                      avatarPath: me.avatarPath,
+                      radius: 16,
+                    ),
             ),
           ),
         ],
@@ -4307,9 +4338,17 @@ Future<bool> _confirmAndDeletePost(BuildContext context, FeedPost post) async {
 /// [onDelete] is passed for the viewer's own posts and [onReport] for
 /// everyone else's, so the ••• menu offers whichever applies.
 Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport, VoidCallback? onDelete}) {
+  // authorName is one combined "First Last" string - split it back out for
+  // ProfileAvatar's initials fallback, same convention every other avatar
+  // spot in the app uses.
+  final nameParts = post.authorName.split(' ').where((s) => s.isNotEmpty).toList();
   return Row(
     children: [
-      InitialsAvatar(initials: post.authorName.split(' ').map((e) => e[0]).take(2).join()),
+      ProfileAvatar(
+        firstName: nameParts.isNotEmpty ? nameParts.first : null,
+        lastName: nameParts.length > 1 ? nameParts.last : null,
+        avatarPath: post.authorAvatarPath,
+      ),
       SizedBox(width: AppSpace.sm),
       Expanded(
         child: Column(
@@ -4392,7 +4431,7 @@ Widget _engagementRow(
       Icons.repeat,
       Icons.share_outlined,
     ],
-    actionHandlers: [onReact, onComment, onRepost, () => _sharePost(context, post)],
+    actionHandlers: [onReact, onComment, onRepost, () => _showShareOptions(context, post)],
     activeActions: {if (post.isReacted) 0, if (post.isReposted) 2},
   );
 }
@@ -4401,17 +4440,58 @@ Widget _engagementRow(
 /// other installed app) with the post's author and text. Every Share button
 /// in the feed used to pass a hardcoded null handler and render as visibly
 /// disabled — see _reactionRow's tint logic.
-Future<void> _sharePost(BuildContext context, FeedPost post) async {
+String postShareText(FeedPost post) {
   final body = post.body.trim();
-  final text = body.isEmpty
+  return body.isEmpty
       ? '${post.authorName} shared this on Richfield Connect.'
       : '${post.authorName} on Richfield Connect:\n\n$body';
+}
+
+Future<void> _sharePost(BuildContext context, FeedPost post) async {
   try {
-    await SharePlus.instance.share(ShareParams(text: text));
+    await SharePlus.instance.share(ShareParams(text: postShareText(post)));
   } catch (_) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text("Couldn't open the share sheet.")));
+  }
+}
+
+/// Share now offers two destinations: a connection inside the app (so only
+/// that connection - not the whole internet - can see it, per Keshav's
+/// request), or the phone's native share sheet for everywhere else.
+Future<void> _showShareOptions(BuildContext context, FeedPost post) async {
+  final choice = await _scrollSafeSheet<String>(
+    context,
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.base, AppSpace.base, AppSpace.xs),
+          child: Text('Share post', style: AppText.headlineSm()),
+        ),
+        ListTile(
+          leading: Icon(Icons.people_outline, color: AppColors.primary),
+          title: Text('Share to a connection'),
+          subtitle: Text('Sends it as a message — only they can see it'),
+          onTap: () => Navigator.pop(sheetContext, 'connection'),
+        ),
+        ListTile(
+          leading: Icon(Icons.ios_share, color: AppColors.primary),
+          title: Text('Share via…'),
+          subtitle: Text('WhatsApp, Messages, email, and more'),
+          onTap: () => Navigator.pop(sheetContext, 'external'),
+        ),
+        SizedBox(height: AppSpace.sm),
+      ],
+    ),
+  );
+  if (!context.mounted || choice == null) return;
+  if (choice == 'connection') {
+    await showShareToConnectionSheet(context, post);
+  } else {
+    await _sharePost(context, post);
   }
 }
 

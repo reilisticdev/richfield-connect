@@ -16,11 +16,14 @@
 // The avatar had the same shape of problem: the little camera badge was a
 // decorative Container inside a Stack with no GestureDetector anywhere.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart' show AppColors, AppRadius, AppSpace, AppText;
 import '../services/auth_error_mapper.dart';
+import '../services/current_user_profile.dart';
 import '../services/media_service.dart';
 import '../services/profile_service.dart';
 
@@ -141,6 +144,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Profile updated'), duration: Duration(seconds: 2)),
       );
+      // So the header avatar (CurrentUserProfile) picks up a new name/photo
+      // immediately, instead of waiting for the next auth-state-change event.
+      unawaited(CurrentUserProfile.refresh());
       // Hand the fresh row back so Portfolio repaints from the database's
       // version of the truth, not from what we hoped we wrote.
       Navigator.of(context).pop(updated);

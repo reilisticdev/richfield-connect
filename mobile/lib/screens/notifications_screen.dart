@@ -196,9 +196,53 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     await openNotificationTarget(context, notification);
   }
 
+  /// Swipe-to-dismiss. Optimistic like every other list mutation on this
+  /// screen — restores the row and shows the real error if the delete
+  /// itself fails (RLS-empty-result included, via NotificationsService).
+  Future<void> _delete(AppNotification n) async {
+    final previous = _items;
+    setState(() => _items = _items.where((x) => x.id != n.id).toList());
+    try {
+      await _service.delete(n.id);
+      unawaited(RealtimeHub.instance.refreshUnreadNotifications());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _items = previous);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  Future<void> _clearRead() async {
+    final me = _me;
+    if (me == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Clear read notifications?'),
+        content: const Text("Unread notifications are left alone. This can't be undone."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final previous = _items;
+    setState(() => _items = _items.where((n) => !n.isRead).toList());
+    try {
+      await _service.clearRead(me);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _items = previous);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasUnread = _items.any((n) => !n.isRead);
+    final hasRead = _items.any((n) => n.isRead);
     final error = _error;
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -207,6 +251,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         title: Text('Notifications', style: AppText.headlineSm()),
         actions: [
           if (hasUnread) TextButton(onPressed: _markAllRead, child: const Text('Mark all read')),
+          if (hasRead)
+            IconButton(
+              tooltip: 'Clear read notifications',
+              onPressed: _clearRead,
+              icon: const Icon(Icons.delete_sweep_outlined),
+            ),
         ],
       ),
       body: _loading
@@ -239,7 +289,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                     )
                   else
-                    for (final n in _items) _tile(n),
+                    for (final n in _items)
+                      Dismissible(
+                        key: ValueKey(n.id),
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (_) => _delete(n),
+                        background: Container(
+                          color: AppColors.error,
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
+                          child: const Icon(Icons.delete_outline, color: Colors.white),
+                        ),
+                        child: _tile(n),
+                      ),
                 ],
               ),
             ),

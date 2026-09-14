@@ -109,4 +109,23 @@ class NotificationsService {
         .eq('recipient_id', me)
         .isFilter('read_at', null);
   }
+
+  /// A delete RLS filters to zero rows doesn't raise, so check the count
+  /// (migration 041 - recipient-only, verified in a rolled-back probe).
+  Future<void> delete(String id) async {
+    final rows = await _client.from('notifications').delete().eq('id', id).select('id');
+    if ((rows as List).isEmpty) {
+      throw const PostgrestException(message: 'That notification could not be deleted.');
+    }
+  }
+
+  /// Clears every notification the recipient has already read, leaving
+  /// anything unread untouched — "clear old ones", not "clear everything".
+  Future<void> clearRead(String me) async {
+    await _client
+        .from('notifications')
+        .delete()
+        .eq('recipient_id', me)
+        .not('read_at', 'is', null);
+  }
 }
