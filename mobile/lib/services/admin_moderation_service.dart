@@ -76,6 +76,39 @@ class AdminOpportunityRow {
   final String? companyName;
 }
 
+/// A pending content_reports row joined with the reporter and the reported
+/// post/comment, mirroring the web console's Moderation.jsx "Flagged
+/// Content" section. [targetBody] is null when the content was already
+/// deleted by the time the queue loads (someone else's report, or the
+/// author deleted it themselves).
+class FlaggedContentRow {
+  const FlaggedContentRow({
+    required this.reportId,
+    required this.contentId,
+    required this.contentType,
+    required this.reason,
+    required this.reporterName,
+    this.targetBody,
+    this.targetAuthorName,
+  });
+
+  final String reportId;
+  final String contentId;
+
+  /// One of content_reports' allowed types: post, video or comment.
+  final String contentType;
+  final String reason;
+  final String reporterName;
+  final String? targetBody;
+  final String? targetAuthorName;
+
+  String get contentLabel => contentType == 'comment'
+      ? 'Comment'
+      : contentType == 'video'
+          ? 'Video post'
+          : 'Post';
+}
+
 class AdminModerationService {
   AdminModerationService(this._client);
 
@@ -173,5 +206,76 @@ class AdminModerationService {
   /// is no undo - the caller must confirm before calling this.
   Future<void> removeAccount(String memberId, String? reason) async {
     await _client.rpc('admin_remove_account', params: {'target_id': memberId, 'reason': reason});
+  }
+
+  /// Every pending report, oldest first, same ordering as the web console.
+  /// `profiles(first_name, last_name)` is the reporter, readable under the
+  /// column-privacy grant from migration 037 the same way admin_profiles is.
+  static const _reportFields =
+      'id, content_id, content_type, reason, profiles(first_name, last_name)';
+
+  Future<List<FlaggedContentRow>> fetchFlaggedContent() async {
+    final reportRows = await _client
+        .from('content_reports')
+        .select(_reportFields)
+        .eq('status', 'pending')
+        .order('created_at', ascending: true);
+    final reports = List<Map<String, dynamic>>.from(reportRows as List);
+    if (reports.isEmpty) return [];
+
+    final postIds = reports
+        .where((r) => r['content_type'] != 'comment')
+        .map((r) => r['content_id'] as String)
+        .toList();
+    final commentIds = reports
+        .where((r) => r['content_type'] == 'comment')
+        .map((r) => r['content_id'] as String)
+        .toList();
+
+    final targets = <String, Map<String, dynamic>>{};
+    const targetFields = 'id, body, profiles(first_name, last_name)';
+    if (postIds.isNotEmpty) {
+      final rows = await _client.from('posts').select(targetFields).inFilter('id', postIds);
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        targets[row['id'] as String] = row;
+      }
+    }
+    if (commentIds.isNotEmpty) {
+      final rows = await _client.from('comments').select(targetFields).inFilter('id', commentIds);
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        targets[row['id'] as String] = row;
+      }
+    }
+
+    String? nameFrom(Map<String, dynamic>? profile) {
+      if (profile == null) return null;
+      final name = '${profile['first_name'] ?? ''} ${profile['last_name'] ?? ''}'.trim();
+      return name.isEmpty ? null : name;
+    }
+
+    return reports.map((report) {
+      final target = targets[report['content_id'] as String];
+      final reporterProfile = report['profiles'] as Map<String, dynamic>?;
+      final targetProfile = target?['profiles'] as Map<String, dynamic>?;
+      return FlaggedContentRow(
+        reportId: report['id'] as String,
+        contentId: report['content_id'] as String,
+        contentType: report['content_type'] as String,
+        reason: report['reason'] as String,
+        reporterName: nameFrom(reporterProfile) ?? 'Unknown user',
+        targetBody: target?['body'] as String?,
+        targetAuthorName: nameFrom(targetProfile),
+      );
+    }).toList();
+  }
+
+  /// Closes every pending report about the same content item, not just the
+  /// one row the admin tapped - mirrors Moderation.jsx's closeReports.
+  Future<void> closeReports(String contentId, String status) async {
+    await _client
+        .from('content_reports')
+        .update({'status': status})
+        .eq('content_id', contentId)
+        .eq('status', 'pending');
   }
 }
