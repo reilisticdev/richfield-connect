@@ -164,10 +164,10 @@ Each folder has a single owner during development, to keep concurrent work confl
 | Folder | Owner | Focus |
 |---|---|---|
 | `/supabase/migrations/` | Reilyn (Tech Lead) | Database schema, Row-Level Security, security hardening |
+| `/supabase/functions/` | Reilyn (Tech Lead) | Edge Functions, Firebase Cloud Messaging delivery |
 | `/ai/` | Reilyn (Tech Lead) | AI microservice |
-| `/mobile/` | Keshav | Flutter app |
-| `/web/` | Saiyusha | React admin dashboard |
-| `/supabase/functions/` | Javel | Edge Functions, push notifications |
+| `/mobile/` | Keshav | Flutter app, realtime & push notifications |
+| `/web/` | Saiyusha | React admin dashboard, Vercel deployment, technical documentation |
 
 All work happens on a branch and merges into `main` via pull request — nobody pushes to `main` directly.
 
@@ -300,10 +300,9 @@ The service holds its own `SUPABASE_SERVICE_ROLE_KEY` to read profile context, b
 
 | Member | Role |
 |---|---|
-| **Reilyn** | Tech Lead — database & security architecture, AI microservice |
-| **Keshav** | Mobile — Flutter application |
-| **Saiyusha** | Web — React admin dashboard |
-| **Javel** | Backend — Edge Functions, push notifications, documentation |
+| **Reilyn** | Tech Lead — database & security architecture, AI microservice, Firebase Cloud Messaging |
+| **Keshav** | Mobile — Flutter application, realtime & push notifications |
+| **Saiyusha** | Web — React admin dashboard, Vercel deployment, technical documentation |
 
 ---
 
