@@ -1,12 +1,13 @@
 // mobile/lib/screens/admin_moderation_screen.dart
 //
-// Mobile parity for two of the three web-only moderation actions Keshav
-// flagged as a gap (2026-09-13 audit): approve/reject a pending business,
-// and suspend/reactivate/remove a member. (The third - deleting a post - is
-// wired straight into the Feed tab's existing ••• menu instead, since that's
-// where FeedService.deletePost() and the "Author manages own posts, plus
-// administrators" RLS policy already apply.) Every action here calls an RPC
-// that already exists and already self-checks is_admin() - see
+// Mobile parity for the web-only moderation actions Keshav flagged as a gap
+// (2026-09-13 audit, extended 2026-09-14): approve/reject a pending
+// business, approve/reject a pending opportunity listing, and
+// suspend/reactivate/remove a member. (Deleting a post is wired straight
+// into the Feed tab's existing ••• menu instead, since that's where
+// FeedService.deletePost() and the "Author manages own posts, plus
+// administrators" RLS policy already apply.) Every action here calls
+// something that already exists and already self-checks is_admin() - see
 // AdminModerationService.
 
 import 'package:flutter/material.dart';
@@ -31,6 +32,7 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
   bool _loading = true;
   String? _error;
   List<AdminMemberRow> _pendingBusinesses = [];
+  List<AdminOpportunityRow> _pendingOpportunities = [];
   List<AdminMemberRow> _members = [];
 
   String _search = '';
@@ -53,14 +55,16 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
       _error = null;
     });
     try {
-      final results = await Future.wait([
+      final results = await Future.wait<Object>([
         _service.fetchPendingBusinesses(),
+        _service.fetchPendingOpportunities(),
         _service.fetchMembers(),
       ]);
       if (!mounted) return;
       setState(() {
-        _pendingBusinesses = results[0];
-        _members = results[1];
+        _pendingBusinesses = results[0] as List<AdminMemberRow>;
+        _pendingOpportunities = results[1] as List<AdminOpportunityRow>;
+        _members = results[2] as List<AdminMemberRow>;
         _loading = false;
       });
     } catch (e) {
@@ -119,6 +123,50 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
       });
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('${business.companyName ?? business.fullName} rejected.')));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busyId = null);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  Future<void> _approveOpportunity(AdminOpportunityRow opportunity) async {
+    setState(() => _busyId = opportunity.id);
+    try {
+      await _service.approveOpportunity(opportunity.id);
+      if (!mounted) return;
+      setState(() {
+        _pendingOpportunities = _pendingOpportunities.where((o) => o.id != opportunity.id).toList();
+        _busyId = null;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('"${opportunity.title}" approved.')));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busyId = null);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  Future<void> _rejectOpportunity(AdminOpportunityRow opportunity) async {
+    final confirmed = await _confirm(
+      title: 'Reject "${opportunity.title}"?',
+      message: "It won't be shown to students. The posting business can submit a revised listing.",
+      confirmLabel: 'Reject listing',
+      destructive: true,
+    );
+    if (!confirmed) return;
+
+    setState(() => _busyId = opportunity.id);
+    try {
+      await _service.rejectOpportunity(opportunity.id);
+      if (!mounted) return;
+      setState(() {
+        _pendingOpportunities = _pendingOpportunities.where((o) => o.id != opportunity.id).toList();
+        _busyId = null;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('"${opportunity.title}" rejected.')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busyId = null);
@@ -342,6 +390,54 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
     );
   }
 
+  Widget _pendingOpportunityCard(AdminOpportunityRow opportunity) {
+    final busy = _busyId == opportunity.id;
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.sm),
+      child: RoundedCard(
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.secondaryContainer,
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              child: Icon(Icons.business_center_outlined, color: AppColors.secondary),
+            ),
+            SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(opportunity.title, style: AppText.labelLg(), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(opportunity.companyName ?? 'Unknown company',
+                      style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            if (busy)
+              SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+            else ...[
+              IconButton(
+                tooltip: 'Approve',
+                icon: Icon(Icons.check_circle_outline, color: AppColors.successGreen),
+                onPressed: () => _approveOpportunity(opportunity),
+              ),
+              IconButton(
+                tooltip: 'Reject',
+                icon: Icon(Icons.cancel_outlined, color: AppColors.error),
+                onPressed: () => _rejectOpportunity(opportunity),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _memberRow(AdminMemberRow member) {
     final busy = _busyId == member.id;
     return Padding(
@@ -438,6 +534,18 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
               )
             else
               ..._pendingBusinesses.map(_pendingBusinessCard),
+            SizedBox(height: AppSpace.base),
+            SectionHeader(title: 'Pending Opportunities'),
+            if (_pendingOpportunities.isEmpty)
+              Padding(
+                padding: EdgeInsets.only(bottom: AppSpace.base),
+                child: Text(
+                  'No opportunity listings waiting for approval.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
+              )
+            else
+              ..._pendingOpportunities.map(_pendingOpportunityCard),
             SizedBox(height: AppSpace.base),
             SectionHeader(title: 'Members'),
             TextField(

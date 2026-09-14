@@ -1,11 +1,13 @@
 // mobile/lib/services/admin_moderation_service.dart
 //
 // Mobile parity for the moderation actions the web admin console already
-// has (Moderation.jsx / Users.jsx): approve/reject a pending business,
-// suspend/reactivate/remove a member. Every RPC here already self-checks
-// is_admin(auth.uid()) and already logs to account_actions /
-// verification_audit - this file only calls what's already live, same as
-// AdminAnalyticsService does for the read side.
+// has (Moderation.jsx / Users.jsx / Opportunities.jsx): approve/reject a
+// pending business or opportunity listing, suspend/reactivate/remove a
+// member. The RPCs here already self-check is_admin(auth.uid()) and already
+// log to account_actions / verification_audit; the opportunity status
+// update relies on the "Administrators manage all opportunities" RLS policy
+// instead, exactly like the web console does - this file only calls what's
+// already live, same as AdminAnalyticsService does for the read side.
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -51,6 +53,27 @@ class AdminMemberRow {
     final name = '$firstName $lastName'.trim();
     return name.isEmpty ? 'Unnamed member' : name;
   }
+}
+
+class AdminOpportunityRow {
+  const AdminOpportunityRow({
+    required this.id,
+    required this.title,
+    required this.companyName,
+  });
+
+  factory AdminOpportunityRow.fromRow(Map<String, dynamic> row) {
+    final businessProfile = (row['profiles'] as Map<String, dynamic>?)?['business_profiles'];
+    return AdminOpportunityRow(
+      id: row['id'] as String,
+      title: (row['title'] as String?) ?? 'Untitled opportunity',
+      companyName: (businessProfile as Map<String, dynamic>?)?['company_name'] as String?,
+    );
+  }
+
+  final String id;
+  final String title;
+  final String? companyName;
 }
 
 class AdminModerationService {
@@ -100,6 +123,43 @@ class AdminModerationService {
       params: {'target_business_id': businessId, 'reason': reason},
     );
   }
+
+  /// business_id is the only FK from opportunities to profiles, so this
+  /// embed is unambiguous - same reasoning as JobsService's own listings.
+  static const _opportunityFields = 'id, title, profiles(business_profiles(company_name))';
+
+  Future<List<AdminOpportunityRow>> fetchPendingOpportunities() async {
+    final rows = await _client
+        .from('opportunities')
+        .select(_opportunityFields)
+        .eq('status', 'pending')
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows as List)
+        .map(AdminOpportunityRow.fromRow)
+        .toList();
+  }
+
+  /// There is no approve/reject_opportunity RPC - the web console
+  /// (Opportunities.jsx) updates `status` directly, relying on the
+  /// "Administrators manage all opportunities" RLS policy (an ALL policy,
+  /// not just SELECT). This mirrors that exactly. `.select('id')` catches
+  /// an RLS-silent-empty-result the same way FeedService.deletePost() does.
+  Future<void> _setOpportunityStatus(String opportunityId, String status) async {
+    final rows = await _client
+        .from('opportunities')
+        .update({'status': status})
+        .eq('id', opportunityId)
+        .select('id');
+    if (List<Map<String, dynamic>>.from(rows as List).isEmpty) {
+      throw const PostgrestException(message: 'That listing could not be updated.');
+    }
+  }
+
+  Future<void> approveOpportunity(String opportunityId) =>
+      _setOpportunityStatus(opportunityId, 'approved');
+
+  Future<void> rejectOpportunity(String opportunityId) =>
+      _setOpportunityStatus(opportunityId, 'rejected');
 
   Future<void> setSuspended(String memberId, bool suspend, String? reason) async {
     await _client.rpc(
