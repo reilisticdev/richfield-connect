@@ -34,13 +34,31 @@ dependencies:
   # QR Connect: renders richfield://member/<uid> on the Portfolio so another
   # member can scan it with their camera (services/member_link.dart).
   pretty_qr_code: ^3.6.0
+  # Native OS share sheet for the feed's Share button (main.dart's
+  # _sharePost) — WhatsApp, Messages, X, email, whatever else is installed.
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
   assets:
     - richfield-spinner-animated.svg
+
+# App icon: Keshav's Richfield crest SVG (mobile/richfield-spinner-animated.svg,
+# already the app's own loading-spinner asset), rasterized to PNG and run
+# through flutter_launcher_icons in place of Flutter's default launcher icon.
+# `dart run flutter_launcher_icons` regenerates
+# android/app/src/main/res/{mipmap,drawable}-*/ic_launcher*. iOS is off -
+# there's no ios/ platform directory in this project (Android only).
+flutter_launcher_icons:
+  android: true
+  ios: false # no ios/ platform directory in this project - Android only
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"

@@ -3,12 +3,19 @@
 // Mobile parity for the web-only moderation actions Keshav flagged as a gap
 // (2026-09-13 audit, extended 2026-09-14): approve/reject a pending
 // business, approve/reject a pending opportunity listing, and
-// suspend/reactivate/remove a member. (Deleting a post is wired straight
-// into the Feed tab's existing ••• menu instead, since that's where
-// FeedService.deletePost() and the "Author manages own posts, plus
-// administrators" RLS policy already apply.) Every action here calls
-// something that already exists and already self-checks is_admin() - see
-// AdminModerationService.
+// suspend/reactivate/remove a member. (An author or admin can already
+// delete a post from the Feed tab's own ••• menu — that has nothing to do
+// with reports.) Every action here calls something that already exists
+// and already self-checks is_admin() - see AdminModerationService.
+//
+// UPDATE (2026-09-14, Keshav QA): the Reports tab had nothing for reported
+// posts - content_reports rows had no reader on mobile at all, so a flagged
+// post just sat there forever with no way to act on it from the phone. The
+// Flagged Content section below is mobile parity for the web console's
+// Moderation.jsx "Flagged Content" block: Keep dismisses the report, Remove
+// deletes the post/comment (via FeedService, so storage cleanup and the
+// RLS-empty-result check both still apply) and closes every pending report
+// on that item.
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -18,6 +25,7 @@ import '../main.dart'
         SectionHeader;
 import '../services/admin_moderation_service.dart';
 import '../services/auth_error_mapper.dart';
+import '../services/feed_service.dart';
 
 class AdminModerationScreen extends StatefulWidget {
   const AdminModerationScreen({super.key});
@@ -28,12 +36,14 @@ class AdminModerationScreen extends StatefulWidget {
 
 class _AdminModerationScreenState extends State<AdminModerationScreen> {
   final _service = AdminModerationService(Supabase.instance.client);
+  final _feedService = FeedService(Supabase.instance.client);
 
   bool _loading = true;
   String? _error;
   List<AdminMemberRow> _pendingBusinesses = [];
   List<AdminOpportunityRow> _pendingOpportunities = [];
   List<AdminMemberRow> _members = [];
+  List<FlaggedContentRow> _flaggedContent = [];
 
   String _search = '';
   String _statusFilter = 'all';
@@ -59,12 +69,14 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
         _service.fetchPendingBusinesses(),
         _service.fetchPendingOpportunities(),
         _service.fetchMembers(),
+        _service.fetchFlaggedContent(),
       ]);
       if (!mounted) return;
       setState(() {
         _pendingBusinesses = results[0] as List<AdminMemberRow>;
         _pendingOpportunities = results[1] as List<AdminOpportunityRow>;
         _members = results[2] as List<AdminMemberRow>;
+        _flaggedContent = results[3] as List<FlaggedContentRow>;
         _loading = false;
       });
     } catch (e) {
@@ -252,6 +264,64 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
         _busyId = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${member.fullName} removed.')));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busyId = null);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  /// Dismisses every pending report on this item without touching the
+  /// content itself.
+  Future<void> _keepContent(FlaggedContentRow report) async {
+    setState(() => _busyId = report.reportId);
+    try {
+      await _service.closeReports(report.contentId, 'dismissed');
+      if (!mounted) return;
+      setState(() {
+        _flaggedContent = _flaggedContent.where((r) => r.contentId != report.contentId).toList();
+        _busyId = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busyId = null);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AuthErrorMapper.fromAny(e))));
+    }
+  }
+
+  /// Deletes the reported post/comment for everyone, then closes every
+  /// pending report on it. If the content is already gone (someone else
+  /// already removed it, or the author deleted it) this only closes the
+  /// reports - matches the web console's removeContent behaviour.
+  Future<void> _removeContent(FlaggedContentRow report) async {
+    final noun = report.contentLabel.toLowerCase();
+    if (report.targetBody != null) {
+      final confirmed = await _confirm(
+        title: 'Remove this $noun for everyone?',
+        message: "This can't be undone.",
+        confirmLabel: 'Remove',
+        destructive: true,
+      );
+      if (!confirmed) return;
+    }
+
+    setState(() => _busyId = report.reportId);
+    try {
+      if (report.targetBody != null) {
+        if (report.contentType == 'comment') {
+          await _feedService.deleteComment(report.contentId);
+        } else {
+          await _feedService.deletePost(report.contentId);
+        }
+      }
+      await _service.closeReports(report.contentId, 'actioned');
+      if (!mounted) return;
+      setState(() {
+        _flaggedContent = _flaggedContent.where((r) => r.contentId != report.contentId).toList();
+        _busyId = null;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${report.contentLabel} removed.')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busyId = null);
@@ -506,6 +576,83 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
     );
   }
 
+  /// Reports store only a content id, so the queue shows the reported post
+  /// or comment itself - deciding on "(no text: image or video only)" isn't
+  /// possible from just "report #1a2b3c4d".
+  String _preview(String? body) {
+    final trimmed = (body ?? '').trim();
+    if (trimmed.isEmpty) return '(no text: image or video only)';
+    return trimmed.length > 160 ? '${trimmed.substring(0, 160)}…' : trimmed;
+  }
+
+  Widget _flaggedContentCard(FlaggedContentRow report) {
+    final busy = _busyId == report.reportId;
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSpace.sm),
+      child: RoundedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.error.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: Icon(Icons.flag_outlined, color: AppColors.error),
+                ),
+                SizedBox(width: AppSpace.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        report.targetBody != null ? _preview(report.targetBody) : 'Already deleted',
+                        style: AppText.labelLg(),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        report.targetAuthorName != null
+                            ? '${report.contentLabel} by ${report.targetAuthorName}'
+                            : report.contentLabel,
+                        style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: AppSpace.sm),
+            Text('Reported by ${report.reporterName}', style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
+            Text('Reason: ${report.reason}', style: AppText.bodySm()),
+            SizedBox(height: AppSpace.xs),
+            if (busy)
+              Align(
+                alignment: Alignment.centerRight,
+                child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: () => _keepContent(report), child: Text('Keep')),
+                  SizedBox(width: AppSpace.xs),
+                  TextButton(
+                    onPressed: () => _removeContent(report),
+                    style: TextButton.styleFrom(foregroundColor: AppColors.error),
+                    child: Text('Remove'),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -523,6 +670,18 @@ class _AdminModerationScreenState extends State<AdminModerationScreen> {
               child: Center(child: CircularProgressIndicator()),
             )
           else ...[
+            SectionHeader(title: 'Flagged Content'),
+            if (_flaggedContent.isEmpty)
+              Padding(
+                padding: EdgeInsets.only(bottom: AppSpace.base),
+                child: Text(
+                  'No reported posts or comments waiting for review.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
+              )
+            else
+              ..._flaggedContent.map(_flaggedContentCard),
+            SizedBox(height: AppSpace.base),
             SectionHeader(title: 'Pending Businesses'),
             if (_pendingBusinesses.isEmpty)
               Padding(

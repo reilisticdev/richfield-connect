@@ -35,6 +35,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -3544,7 +3545,7 @@ class _TextPostCard extends StatelessWidget {
             ),
           ],
           SizedBox(height: AppSpace.sm),
-          _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
+          _engagementRow(context, post, onReact: onReact, onComment: onComment, onRepost: onRepost),
         ],
       ),
     );
@@ -3631,7 +3632,7 @@ class _VideoPostCard extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.all(AppSpace.base),
-            child: _engagementRow(post, onReact: onReact, onComment: onComment, onRepost: onRepost),
+            child: _engagementRow(context, post, onReact: onReact, onComment: onComment, onRepost: onRepost),
           ),
         ],
       ),
@@ -4368,9 +4369,10 @@ Widget _postAuthorRow(FeedPost post, {VoidCallback? onReport, VoidCallback? onDe
   );
 }
 
-/// Like / Comment / Repost / Share for a feed card. Share has nothing behind
-/// it yet, so it stays disabled.
+/// Like / Comment / Repost / Share for a feed card. Share opens the phone's
+/// native share sheet — see _sharePost below.
 Widget _engagementRow(
+  BuildContext context,
   FeedPost post, {
   VoidCallback? onReact,
   VoidCallback? onComment,
@@ -4390,9 +4392,27 @@ Widget _engagementRow(
       Icons.repeat,
       Icons.share_outlined,
     ],
-    actionHandlers: [onReact, onComment, onRepost, null],
+    actionHandlers: [onReact, onComment, onRepost, () => _sharePost(context, post)],
     activeActions: {if (post.isReacted) 0, if (post.isReposted) 2},
   );
+}
+
+/// Opens the phone's native share sheet (WhatsApp, Messages, X, email, any
+/// other installed app) with the post's author and text. Every Share button
+/// in the feed used to pass a hardcoded null handler and render as visibly
+/// disabled — see _reactionRow's tint logic.
+Future<void> _sharePost(BuildContext context, FeedPost post) async {
+  final body = post.body.trim();
+  final text = body.isEmpty
+      ? '${post.authorName} shared this on Richfield Connect.'
+      : '${post.authorName} on Richfield Connect:\n\n$body';
+  try {
+    await SharePlus.instance.share(ShareParams(text: text));
+  } catch (_) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text("Couldn't open the share sheet.")));
+  }
 }
 
 /// Engagement row.
