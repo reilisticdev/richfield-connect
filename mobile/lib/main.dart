@@ -41,7 +41,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'config/supabase_config.dart';
-import 'screens/admin_moderation_screen.dart';
 import 'screens/edit_profile_screen.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/privacy_settings_screen.dart';
@@ -79,7 +78,6 @@ import 'services/notifications_service.dart';
 import 'services/realtime_hub.dart';
 import 'services/portfolio_service.dart';
 import 'services/student_analytics_service.dart';
-import 'services/admin_analytics_service.dart';
 import 'services/connections_service.dart' show PersonSummary;
 import 'screens/portfolio_entry_sheet.dart';
 import 'widgets/profile_avatar.dart';
@@ -2118,116 +2116,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 // SECTION 7 — ROOT SHELL (bottom navigation)
 // =====================================================================
 
-class AdminDashboardScreen extends StatefulWidget {
-  AdminDashboardScreen({super.key});
-
-  @override
-  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
-}
-
-class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  final _service = AdminAnalyticsService(Supabase.instance.client);
-  AdminOverview? _overview;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() => _error = null);
-    try {
-      final overview = await _service.load();
-      if (mounted) setState(() => _overview = overview);
-    } catch (e) {
-      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
-    }
-  }
-
-  String _plural(int n, String word) => '$n $word${n == 1 ? '' : 's'}';
-
-  Widget _stat(int value, String label) => Expanded(
-        child: Column(
-          children: [
-            Text('$value', style: AppText.headlineMd(color: AppColors.primary)),
-            Text(label, style: AppText.bodySm(color: AppColors.onSurfaceVariant)),
-          ],
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    final o = _overview;
-    final pendingBusinesses = o?.businessesByStatus['pending'] ?? 0;
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
-        children: [
-          RichfieldHeader(
-            title: 'Admin Overview',
-            subtitle: 'RICHFIELD STAFF',
-            onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
-          ),
-          if (_error != null) ...[
-            Text(_error!, style: AppText.bodySm(color: AppColors.error)),
-            TextButton(onPressed: _load, child: Text('Try again')),
-          ] else if (o == null)
-            Padding(
-              padding: EdgeInsets.all(AppSpace.xl),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else ...[
-            SectionHeader(title: 'Members'),
-            _metricGrid([
-              ['${o.usersByRole['student'] ?? 0}', 'Students', Icons.school_outlined],
-              ['${o.usersByRole['alumni'] ?? 0}', 'Alumni', Icons.workspace_premium_outlined],
-              ['${o.usersByRole['business'] ?? 0}', 'Businesses', Icons.business_center_outlined],
-              ['${o.monthlyActiveUsers}', 'Active this month', Icons.insights_outlined],
-            ]),
-            SizedBox(height: AppSpace.base),
-            SectionHeader(title: 'Needs attention'),
-            _checkRow('Business accounts awaiting approval', '$pendingBusinesses pending',
-                done: pendingBusinesses == 0),
-            _checkRow('Alumni verification claims', '${o.pendingAlumniClaims} pending',
-                done: o.pendingAlumniClaims == 0),
-            _checkRow('Flagged content', _plural(o.flaggedContent, 'report'), done: o.flaggedContent == 0),
-            SizedBox(height: AppSpace.base),
-            SectionHeader(title: 'Content'),
-            RoundedCard(
-              child: Row(
-                children: [
-                  _stat(o.posts, 'Posts'),
-                  _stat(o.videos, 'Videos'),
-                  _stat(o.opportunities, 'Opportunities'),
-                ],
-              ),
-            ),
-            SizedBox(height: AppSpace.base),
-            RoundedCard(
-              child: Row(
-                children: [
-                  Icon(Icons.desktop_windows_outlined, color: AppColors.secondary),
-                  SizedBox(width: AppSpace.sm),
-                  Expanded(
-                    child: Text(
-                      'Business approvals, member suspensions and post removal are in the Moderation tab. '
-                      'Broadcasting announcements is still web-console only.',
-                      style: AppText.bodyMd(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
 class BusinessDashboardScreen extends StatefulWidget {
   BusinessDashboardScreen({super.key});
 
@@ -2789,26 +2677,42 @@ class BusinessHubScreen extends StatelessWidget {
   }
 }
 
+// Administrators manage the platform from the React web console — every
+// approval, suspension and moderation action reads and writes the same
+// tables and RLS policies either way. This app stays a member experience
+// for every role, including administrators signed in on their own phone.
 class AdminHubScreen extends StatelessWidget {
   AdminHubScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Column(
-        children: [
-          TabBar(
-            tabs: [Tab(text: 'Feed'), Tab(text: 'Reports'), Tab(text: 'Moderation')],
-            labelColor: AppColors.primary,
+    return ListView(
+      padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.sm, AppSpace.base, 24),
+      children: [
+        RichfieldHeader(
+          title: 'Admin Overview',
+          subtitle: 'RICHFIELD STAFF',
+          onAvatarTap: () => _openAccountMenu(context, AuthService(Supabase.instance.client)),
+        ),
+        SizedBox(height: AppSpace.base),
+        RoundedCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.desktop_windows_outlined, color: AppColors.secondary, size: 32),
+              SizedBox(height: AppSpace.sm),
+              Text('Use the web console', style: AppText.headlineSm()),
+              SizedBox(height: AppSpace.xs),
+              Text(
+                'Business and opportunity approvals, member suspensions, verification claims '
+                'and flagged content are managed from the Richfield Connect admin console on '
+                'the web. This app is a member experience only.',
+                style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+              ),
+            ],
           ),
-          Expanded(
-            child: TabBarView(
-              children: [FeedScreen(), AdminDashboardScreen(), AdminModerationScreen()],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -4609,6 +4513,11 @@ class _JobsScreenState extends State<JobsScreen> {
   /// Feed's admin post-delete.
   bool get _isAdmin => _role == 'administrator';
 
+  /// RLS already refuses a business's own INSERT into applications, so this
+  /// is purely to stop the button from ever presenting an option that would
+  /// only fail with a raw permission error.
+  bool get _isBusiness => _role == 'business';
+
   @override
   void initState() {
     super.initState();
@@ -5064,15 +4973,17 @@ class _JobsScreenState extends State<JobsScreen> {
                   icon: Icons.visibility_outlined,
                   onPressed: () => _showDetails(job),
                 ),
-                SizedBox(width: AppSpace.sm),
-                Expanded(
-                  child: PrimaryButton(
-                    label: 'Apply',
-                    icon: Icons.send_outlined,
-                    fullWidth: true,
-                    onPressed: () => _apply(job),
+                if (!_isBusiness) ...[
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: PrimaryButton(
+                      label: 'Apply',
+                      icon: Icons.send_outlined,
+                      fullWidth: true,
+                      onPressed: () => _apply(job),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ],
