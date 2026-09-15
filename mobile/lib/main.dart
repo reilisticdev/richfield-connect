@@ -4609,6 +4609,11 @@ class _JobsScreenState extends State<JobsScreen> {
   /// Feed's admin post-delete.
   bool get _isAdmin => _role == 'administrator';
 
+  /// RLS already refuses a business's own INSERT into applications, so this
+  /// is purely to stop the button from ever presenting an option that would
+  /// only fail with a raw permission error.
+  bool get _isBusiness => _role == 'business';
+
   @override
   void initState() {
     super.initState();
@@ -5064,15 +5069,17 @@ class _JobsScreenState extends State<JobsScreen> {
                   icon: Icons.visibility_outlined,
                   onPressed: () => _showDetails(job),
                 ),
-                SizedBox(width: AppSpace.sm),
-                Expanded(
-                  child: PrimaryButton(
-                    label: 'Apply',
-                    icon: Icons.send_outlined,
-                    fullWidth: true,
-                    onPressed: () => _apply(job),
+                if (!_isBusiness) ...[
+                  SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: PrimaryButton(
+                      label: 'Apply',
+                      icon: Icons.send_outlined,
+                      fullWidth: true,
+                      onPressed: () => _apply(job),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ],
