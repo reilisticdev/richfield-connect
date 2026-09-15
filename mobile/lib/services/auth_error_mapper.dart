@@ -73,6 +73,12 @@ class AuthErrorMapper {
   /// approve_alumni_verification/reject_alumni_verification). These DO
   /// carry the real Postgres message/detail/hint/code.
   static String fromPostgrestException(PostgrestException e) {
+    // RLS refusals (a blocked member messaging you, a suspended account
+    // writing, etc.) otherwise surface Postgres' own "new row violates
+    // row-level security policy for table ..." text verbatim.
+    if (e.code == '42501') {
+      return "That action isn't allowed right now.";
+    }
     final parts = <String>[e.message];
     if (e.hint != null && e.hint!.isNotEmpty) {
       parts.add(e.hint!);
