@@ -17,14 +17,21 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/ai_config.dart';
 
+/// Shown whenever the service is unreachable or answers with something we
+/// can't use. The underlying detail (HTTP status, the Flask `error` string,
+/// a raw HTML or JSON blob) goes to debugPrint and never to the screen.
+const aiUnavailableMessage =
+    'Our AI is taking a quick break. Please try again in a moment.';
+
 /// Thrown for anything we can turn into a message worth showing the user
-/// — a non-2xx response with a real `error` field from the Flask service,
-/// a timeout, or a connection failure. Kept distinct from a bare Exception
-/// so call sites can show `e.message` directly without re-parsing.
+/// — a non-2xx response from the Flask service, a timeout, or a connection
+/// failure. Every message on this type is written for the user, so call
+/// sites can show `e.message` directly without re-parsing.
 class AiServiceException implements Exception {
   AiServiceException(this.message);
   final String message;
@@ -210,17 +217,16 @@ class AiService {
       // Most common cause: ngrok's interstitial HTML page slipped through
       // despite the skip header, or the tunnel is pointed at the wrong
       // process entirely. A raw HTML blob is not useful to show the user.
-      throw AiServiceException(
-        'The AI assistant sent back something that wasn\'t valid JSON (HTTP ${res.statusCode}). '
-        'The server address may be pointing at the wrong thing.',
-      );
+      debugPrint('AI service: non-JSON body (HTTP ${res.statusCode})');
+      throw AiServiceException(aiUnavailableMessage);
     }
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      final serverError = decoded['error'];
-      throw AiServiceException(
-        serverError is String ? serverError : 'AI service error (HTTP ${res.statusCode}).',
-      );
+      // The Flask service's own `error` string used to be shown to the user
+      // verbatim, which is how a raw traceback or JSON blob reached the UI.
+      // It goes to the log instead; the user gets one clean line.
+      debugPrint('AI service error (HTTP ${res.statusCode}): ${decoded['error']}');
+      throw AiServiceException(aiUnavailableMessage);
     }
 
     return decoded;

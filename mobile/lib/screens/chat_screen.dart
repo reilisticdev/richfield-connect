@@ -386,6 +386,95 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Long-press menu. Reporting is offered only on the other person's
+  /// messages - there is nothing useful about reporting your own.
+  Future<void> _messageActions(ChatMessage m) async {
+    final mine = m.senderId == _me;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      // Without isScrollControlled the sheet is capped at 9/16 of the screen
+      // and overflows on smaller devices (same fix as PR #51).
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(Icons.copy_outlined, color: AppColors.primary),
+                title: Text('Copy text', style: AppText.bodyMd()),
+                onTap: () => Navigator.pop(sheet, 'copy'),
+              ),
+              if (!mine)
+                ListTile(
+                  leading: Icon(Icons.flag_outlined, color: AppColors.error),
+                  title: Text('Report message', style: AppText.bodyMd()),
+                  subtitle: Text(
+                    'Sends this message to Richfield moderators',
+                    style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                  ),
+                  onTap: () => Navigator.pop(sheet, 'report'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'copy') {
+      await Clipboard.setData(ClipboardData(text: m.body));
+      if (mounted) _snack('Message copied');
+      return;
+    }
+    await _reportMessage(m);
+  }
+
+  Future<void> _reportMessage(ChatMessage m) async {
+    const reasons = [
+      'Harassment or bullying',
+      'Spam or a scam',
+      'Inappropriate or explicit content',
+      'Something else',
+    ];
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.base, AppSpace.base, 4),
+                child: Text('Why are you reporting this?', style: AppText.headlineSm()),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(AppSpace.base, 0, AppSpace.base, AppSpace.sm),
+                child: Text(
+                  'A moderator will see this message and who sent it.',
+                  style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+                ),
+              ),
+              for (final r in reasons)
+                ListTile(
+                  title: Text(r, style: AppText.bodyMd()),
+                  onTap: () => Navigator.pop(sheet, r),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || reason == null) return;
+    try {
+      await _messaging.reportMessage(message: m, reason: reason);
+      if (mounted) _snack('Reported. Our moderators will take a look.');
+    } catch (e) {
+      if (mounted) _snack(AuthErrorMapper.fromAny(e));
+    }
+  }
+
   Widget _bubble(ChatMessage m) {
     final mine = m.senderId == _me;
     final foreground = mine ? AppColors.onPrimary : AppColors.onSurface;
@@ -407,10 +496,7 @@ class _ChatScreenState extends State<ChatScreen> {
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onTap: m.failed ? () => _send(retry: m) : null,
-        onLongPress: () {
-          Clipboard.setData(ClipboardData(text: m.body));
-          _snack('Message copied');
-        },
+        onLongPress: () => _messageActions(m),
         child: Container(
           constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
           margin: const EdgeInsets.symmetric(vertical: 2),

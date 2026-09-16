@@ -151,6 +151,27 @@ void main() async {
   runApp(RichfieldConnectApp(authService: authService));
 }
 
+/// A message for the sign-in screen to show the next time it is built.
+///
+/// Signing out makes go_router redirect to /login on its own, and racing that
+/// with an explicit go('/login?reason=...') is how you lose the message (or
+/// get a redirect loop - see PR #43). Handing it over here instead means
+/// whichever navigation wins, the screen still explains itself.
+class PendingLoginNotice {
+  PendingLoginNotice._();
+
+  static String? _message;
+
+  static void set(String message) => _message = message;
+
+  /// Reads and clears, so the notice shows once and not on every later build.
+  static String? take() {
+    final message = _message;
+    _message = null;
+    return message;
+  }
+}
+
 class ThemeController {
   ThemeController._();
 
@@ -1155,7 +1176,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    _errorMessage = widget.notice;
+    _errorMessage = widget.notice ?? PendingLoginNotice.take();
     EmailConfirmation.justConfirmed.addListener(_onConfirmationLink);
   }
 
@@ -1214,7 +1235,19 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      if (!await _portalMatchesAccount()) return;
     } catch (e) {
+      // A suspended account is banned in GoTrue (migration 033), so sign-in
+      // fails here rather than anywhere a session exists. An inline red line
+      // is the wrong register for "your account has been paused" - this gets
+      // an explanation and a way forward instead.
+      if (e is AuthException && e.message.toLowerCase().contains('banned')) {
+        if (mounted) {
+          setState(() => _submitting = false);
+          await _showSuspendedDialog();
+        }
+        return;
+      }
       setState(() {
         _errorMessage = AuthErrorMapper.fromAny(e);
         if (e is AuthException && e.message.toLowerCase().contains('not confirmed')) {
@@ -1224,6 +1257,103 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  /// Signing in through the wrong portal is refused: a business account
+  /// picking Student, or a student picking Business, is signed straight back
+  /// out with an explanation rather than being dropped into a shell built for
+  /// a role they don't have.
+  ///
+  /// The tile is otherwise only a label/hint picker - the real role lives in
+  /// profiles.role - so this is the one place the choice is enforced. Returns
+  /// true when the account may proceed.
+  Future<bool> _portalMatchesAccount() async {
+    String? role;
+    try {
+      role = (await widget.authService.fetchOwnProfile())['role'] as String?;
+    } catch (_) {
+      // Couldn't read the profile. The router's own gate re-checks on the way
+      // to /home, so let it through rather than blocking a valid sign-in on a
+      // transient failure.
+      return true;
+    }
+
+    // Administrator has no tile of its own any more (governance is web-only),
+    // so it can never "match" - it gets its own message instead of being told
+    // to use a portal that isn't there.
+    if (role == 'administrator') {
+      await _refusePortal(
+          'Administrator accounts are managed on the Richfield Connect web console.');
+      return false;
+    }
+
+    final expected = switch (_selectedRole) {
+      RichfieldRole.student => 'student',
+      RichfieldRole.alumni => 'alumni',
+      RichfieldRole.corporate => 'business',
+      RichfieldRole.admin => null,
+    };
+    if (role == null || role == expected) return true;
+
+    // Named from the tile's own label, not the database word: the account is
+    // 'business' but the tile a judge is looking for says "Corporate".
+    final correctPortal = switch (role) {
+      'student' => RichfieldRole.student.label,
+      'alumni' => RichfieldRole.alumni.label,
+      'business' => RichfieldRole.corporate.label,
+      _ => null,
+    };
+    await _refusePortal(correctPortal == null
+        ? 'Invalid portal for this account.'
+        : 'Invalid portal. Please use the $correctPortal login screen.');
+    return false;
+  }
+
+  /// Ends the session and makes sure the explanation is seen either way: if
+  /// go_router has already swapped this screen out, the next one picks the
+  /// notice up in initState; if it hasn't, this shows it in place.
+  Future<void> _refusePortal(String message) async {
+    PendingLoginNotice.set(message);
+    await widget.authService.signOutLocally();
+    if (mounted) {
+      final pending = PendingLoginNotice.take();
+      if (pending != null) setState(() => _errorMessage = pending);
+    }
+  }
+
+  /// The reason an administrator recorded is deliberately NOT shown here.
+  /// Users.jsx captures it as "kept in the admin log", it can name other
+  /// people or reference internal tickets, and surfacing it would need an
+  /// endpoint that tells any caller whether a given email is suspended and
+  /// why. The member gets a respectful explanation and a route onward.
+  Future<void> _showSuspendedDialog() async {
+    final router = GoRouter.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('This account is suspended'),
+        content: Text(
+          'A Richfield administrator has paused access to this account, so you '
+          'can\'t sign in at the moment.\n\n'
+          'If you think this is a mistake, please contact Richfield and they can '
+          'review it with you.',
+          style: AppText.bodyMd(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialog);
+              router.go('/signup');
+            },
+            child: Text('Go to sign up'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1295,7 +1425,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSpacing: AppSpace.sm,
                 crossAxisSpacing: AppSpace.sm,
                 childAspectRatio: 2.4,
-                children: RichfieldRole.values.map((role) {
+                // Administrator is deliberately absent: governance moved to
+                // the React web console, so the app no longer offers an admin
+                // sign-in affordance. The tile only picks the email label and
+                // hint anyway - the real role comes from profiles.role - so an
+                // existing admin account is still routed correctly if one signs
+                // in, and lands on the "use the web console" screen.
+                children: RichfieldRole.values
+                    .where((role) => role != RichfieldRole.admin)
+                    .map((role) {
                   final selected = role == _selectedRole;
                   return _RoleTile(
                     role: role,
@@ -4713,57 +4851,74 @@ class _JobsScreenState extends State<JobsScreen> {
     }
     if (!mounted) return;
 
-    // A CV is required to apply. Enforced only when the lookup succeeded and
-    // genuinely came back empty - a failed lookup must not block someone who
-    // does have one on file, so that case still falls through to the confirm.
+    // Applying without a CV is discouraged but not blocked: a hard gate would
+    // stop a member who has not imported one yet, which is the wrong outcome
+    // on a deadline. They are warned, offered a one-tap import, and can still
+    // continue. Only shown when the lookup succeeded and genuinely came back
+    // empty - a failed lookup must not nag someone who does have one on file.
+    // Set when the member has already said "apply anyway" to the no-CV
+    // warning, so the normal confirm below doesn't ask a second time.
+    var warned = false;
     if (cvPath == null && !cvCheckFailed) {
-      final importNow = await showDialog<bool>(
+      final choice = await showDialog<String>(
         context: context,
         builder: (dialog) => AlertDialog(
-          title: Text('A CV is required'),
-          content: Text('$company needs a CV with this application. Import one '
-              'and it will be attached for you.'),
+          title: Text('Apply without a CV?'),
+          content: Text('$company asks for a CV with applications, and yours '
+              'will stand out more with one attached. You can import it now, '
+              'or apply with your profile only.'),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+              onPressed: () => Navigator.pop(dialog, 'cancel'),
+              child: Text('Not now'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, 'anyway'),
+              child: Text('Apply anyway'),
+            ),
             FilledButton(
-              onPressed: () => Navigator.pop(dialog, true),
+              onPressed: () => Navigator.pop(dialog, 'import'),
               child: Text('Import my CV'),
             ),
           ],
         ),
       );
-      if (importNow != true || !mounted) return;
-      await Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
-      if (!mounted) return;
-      try {
-        cvPath = (await _profileService.fetchCvStatus(studentId)).path;
-      } catch (_) {
-        cvPath = null;
+      if (choice == null || choice == 'cancel' || !mounted) return;
+      if (choice == 'import') {
+        await Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
+        if (!mounted) return;
+        try {
+          cvPath = (await _profileService.fetchCvStatus(studentId)).path;
+        } catch (_) {
+          cvPath = null;
+        }
+        if (!mounted) return;
       }
-      if (!mounted || cvPath == null) return;
+      warned = choice == 'anyway';
     }
 
     final hasCv = cvPath != null;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        title: Text('Apply to $title?'),
-        content: Text(hasCv
-            ? 'Your CV on file will be shared with $company for this application, '
-                'along with your profile.'
-            : 'We could not confirm your CV just now, so $company may see your '
-                'profile only.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: Text(hasCv ? 'Share CV & apply' : 'Apply anyway'),
-          ),
-        ],
-      ),
-    );
+    final confirmed = warned
+        ? true
+        : await showDialog<bool>(
+            context: context,
+            builder: (dialog) => AlertDialog(
+              title: Text('Apply to $title?'),
+              content: Text(hasCv
+                  ? 'Your CV on file will be shared with $company for this application, '
+                      'along with your profile.'
+                  : '$company will see your profile only - no CV is attached.'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialog, true),
+                  child: Text(hasCv ? 'Share CV & apply' : 'Apply anyway'),
+                ),
+              ],
+            ),
+          );
     if (confirmed != true || !mounted) return;
 
     try {

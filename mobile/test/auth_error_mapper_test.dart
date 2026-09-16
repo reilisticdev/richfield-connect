@@ -71,11 +71,35 @@ void main() {
       expect(message, isNot(contains('violates')));
     });
 
-    test('other Postgrest errors still surface the real message and hint', () {
-      final e = PostgrestException(message: 'duplicate key value', code: '23505', hint: 'Try a different value.');
+    test('a constraint violation is mapped, not shown as raw Postgres text', () {
+      final e = PostgrestException(
+        message: 'duplicate key value violates unique constraint "skills_pkey"',
+        code: '23505',
+        hint: 'Try a different value.',
+      );
       final message = AuthErrorMapper.fromPostgrestException(e);
-      expect(message, contains('duplicate key value'));
-      expect(message, contains('Try a different value.'));
+      expect(message, isNot(contains('duplicate key')));
+      expect(message, isNot(contains('constraint')));
+      expect(message, isNot(contains('skills_pkey')));
+    });
+
+    test('an unrecognised code falls back to a clean line, leaking nothing', () {
+      final e = PostgrestException(
+        message: 'relation "public.secret_table" does not exist',
+        code: '42P01',
+      );
+      final message = AuthErrorMapper.fromPostgrestException(e);
+      expect(message, 'Something went wrong. Please try again.');
+      expect(message, isNot(contains('secret_table')));
+    });
+
+    test('a plpgsql raise (P0001) is written for the user, so it is kept', () {
+      final e = PostgrestException(
+        message: 'Registration Failed: Students must use a valid Richfield or AAA institutional email address.',
+        code: 'P0001',
+      );
+      final message = AuthErrorMapper.fromPostgrestException(e);
+      expect(message, contains('Richfield or AAA institutional email'));
     });
   });
 }

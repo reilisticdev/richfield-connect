@@ -10,7 +10,13 @@ const preview = (text) => {
 };
 
 const contentLabel = (type) =>
-  type === "comment" ? "Comment" : type === "video" ? "Video post" : "Post";
+  type === "comment"
+    ? "Comment"
+    : type === "video"
+      ? "Video post"
+      : type === "message"
+        ? "Direct message"
+        : "Post";
 
 function Moderation() {
   const [businesses, setBusinesses] = useState([]);
@@ -108,7 +114,7 @@ function Moderation() {
     const { data, error } = await supabase
       .from("content_reports")
       .select(
-        "id, content_id, content_type, reason, status, created_at, profiles(first_name, last_name)"
+        "id, content_id, content_type, reason, status, created_at, content_snippet, profiles(first_name, last_name)"
       )
       .eq("status", "pending")
       .order("created_at", { ascending: true });
@@ -121,8 +127,14 @@ function Moderation() {
     }
 
     const reports = data || [];
+    // Message reports carry their own snippet (migration 050) because there
+    // is no admin SELECT policy on `messages` - looking the id up in `posts`
+    // would find nothing and render the report as "Already deleted".
     const postIds = reports
-      .filter((report) => report.content_type !== "comment")
+      .filter(
+        (report) =>
+          report.content_type !== "comment" && report.content_type !== "message"
+      )
       .map((report) => report.content_id);
     const commentIds = reports
       .filter((report) => report.content_type === "comment")
@@ -523,13 +535,17 @@ function Moderation() {
                   <strong>
                     {content.target
                       ? preview(content.target.body)
-                      : "Already deleted"}
+                      : content.content_snippet
+                        ? preview(content.content_snippet)
+                        : "Already deleted"}
                   </strong>
                   <small>
                     {contentLabel(content.content_type)}
                     {content.target?.profiles
                       ? ` by ${content.target.profiles.first_name} ${content.target.profiles.last_name}`
-                      : ""}
+                      : content.content_type === "message"
+                        ? " - captured when it was reported"
+                        : ""}
                   </small>
                 </div>
 
@@ -552,8 +568,13 @@ function Moderation() {
                   <button
                     className="reject-button"
                     onClick={() => removeContent(content)}
+                    title={
+                      content.content_type === "message"
+                        ? "Closes the report as actioned. A direct message cannot be deleted from here - suspend the sender from Users if it warrants that."
+                        : undefined
+                    }
                   >
-                    Remove
+                    {content.content_type === "message" ? "Action" : "Remove"}
                   </button>
                 </div>
               </div>
