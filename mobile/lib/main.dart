@@ -1529,6 +1529,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _enrolmentYearController = TextEditingController();
   final _graduationYearController = TextEditingController();
   final _companyNameController = TextEditingController();
+  final _registrationNumberController = TextEditingController();
   final _industryController = TextEditingController();
   final _locationController = TextEditingController();
 
@@ -1599,6 +1600,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _enrolmentYearController,
         _graduationYearController,
         _companyNameController,
+        _registrationNumberController,
         _industryController,
         _locationController,
       ];
@@ -1712,6 +1714,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _yearOrderProblem();
       default:
         if (_text(_companyNameController).isEmpty) return 'Enter your company name.';
+        if (_text(_registrationNumberController).isEmpty) {
+          return 'Enter your company\'s registration number.';
+        }
         return null;
     }
   }
@@ -1726,6 +1731,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_tab == 2) {
       put('company_name', _companyNameController);
+      put('registration_number', _registrationNumberController);
       put('industry', _industryController);
       put('location', _locationController);
     } else {
@@ -2061,6 +2067,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return [
         _labeledField('Company name', 'e.g. Acme Digital (Pty) Ltd', Icons.apartment_outlined,
             controller: _companyNameController),
+        gap(),
+        _labeledField(
+            'Registration number', 'CIPC company registration number', Icons.badge_outlined,
+            controller: _registrationNumberController),
         gap(),
         _labeledField('Industry (optional)', 'Software engineering and data', Icons.business_center_outlined,
             controller: _industryController),

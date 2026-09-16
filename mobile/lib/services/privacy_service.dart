@@ -114,6 +114,7 @@ class PrivacyService {
   PrivacyService([SupabaseClient? client]) : _clientOverride = client;
 
   static const verificationDocsBucket = 'alumni-verification-docs';
+  static const businessVerificationDocsBucket = 'business-verification-docs';
 
   final SupabaseClient? _clientOverride;
 
@@ -217,6 +218,7 @@ class PrivacyService {
       (MediaService.cvsBucket, '$userId/applications'),
       (MediaService.cvsBucket, userId),
       (verificationDocsBucket, userId),
+      (businessVerificationDocsBucket, userId),
     ]) {
       final storage = _client.storage.from(bucket);
       final paths = <String>[];

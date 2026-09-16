@@ -32,7 +32,7 @@ function Moderation() {
     const { data, error } = await supabase
       .from("admin_profiles")
       .select(
-        "id, first_name, last_name, email, account_status, business_profiles(company_name)"
+        "id, first_name, last_name, email, account_status, business_profiles(company_name, registration_number, document_path)"
       )
       .eq("role", "business")
       .eq("account_status", "pending");
@@ -45,6 +45,22 @@ function Moderation() {
     }
 
     setLoadingBusinesses(false);
+  };
+
+  // The bucket is private (migration 045), so every open mints a short-lived
+  // signed URL rather than a durable one ever being handed out or stored.
+  const viewBusinessDocument = async (documentPath) => {
+    if (!documentPath) return;
+    const { data, error } = await supabase.storage
+      .from("business-verification-docs")
+      .createSignedUrl(documentPath, 300);
+
+    if (error || !data?.signedUrl) {
+      console.error("Error creating signed URL for business document:", error);
+      setError("Could not open that document.");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
   const fetchPendingAlumni = async () => {
@@ -301,6 +317,11 @@ function Moderation() {
                   <small>
                     {business.first_name} {business.last_name}
                   </small>
+                  <small>
+                    Reg. no:{" "}
+                    {business.business_profiles?.registration_number ||
+                      "not provided"}
+                  </small>
                 </div>
 
                 <div>{business.email}</div>
@@ -312,6 +333,21 @@ function Moderation() {
                 </div>
 
                 <div className="action-buttons">
+                  {business.business_profiles?.document_path ? (
+                    <button
+                      className="approve-button"
+                      onClick={() =>
+                        viewBusinessDocument(
+                          business.business_profiles.document_path
+                        )
+                      }
+                    >
+                      View document
+                    </button>
+                  ) : (
+                    <small>No document uploaded</small>
+                  )}
+
                   <button
                     className="approve-button"
                     onClick={() =>
