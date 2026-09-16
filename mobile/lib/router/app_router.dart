@@ -380,13 +380,24 @@ class _BusinessDocumentUploadState extends State<_BusinessDocumentUpload> {
         extension: extension,
         contentType: contentType,
       );
-      await Supabase.instance.client
+      // Re-select the row: an update RLS filters to zero rows comes back as
+      // a success with no rows, which would leave the member looking at
+      // "uploaded" while the reviewer still sees no document at all.
+      final saved = await Supabase.instance.client
           .from('business_profiles')
           .update({'document_path': path})
-          .eq('profile_id', userId);
+          .eq('profile_id', userId)
+          .select('profile_id');
+      if (saved.isEmpty) {
+        throw StateError(
+            'The document uploaded but could not be attached to your company profile.');
+      }
       if (mounted) setState(() => _uploaded = true);
     } catch (e) {
-      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
+      if (mounted) {
+        setState(() =>
+            _error = e is StateError ? e.message : AuthErrorMapper.fromAny(e));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
