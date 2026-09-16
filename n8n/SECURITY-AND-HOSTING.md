@@ -59,6 +59,20 @@ this — it's a small, concrete, easy-to-explain example of the exact privacy-by
 POPIA section of the rubric is looking for, and it costs you one settings screen to have it ready
 to cite.
 
+**Update 2026-09-16**: on Reilyn's local dev instance this is set via env vars rather than the
+Settings UI, since that's easier to carry over to whatever host n8n ends up on permanently:
+
+```
+EXECUTIONS_DATA_PRUNE=true
+EXECUTIONS_DATA_MAX_AGE=24
+```
+
+`EXECUTIONS_DATA_MAX_AGE` is in hours - 24 is enough to debug a failed run without indefinitely
+retaining member data in the execution log. Whoever sets up n8n Cloud or Railway for the actual
+demo (see "Where to host n8n" above - still not done as of this writing) should set the equivalent
+on that instance too; on n8n Cloud this may only be available via the Settings UI rather than env
+vars depending on plan, same caveat as the `$env` custom-variables note above.
+
 ## Keeping the service-role key actually secret
 
 Every workflow in this set references the Supabase service-role key as `{{ $env.SUPABASE_SERVICE_ROLE_KEY }}`
