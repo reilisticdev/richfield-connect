@@ -4,6 +4,7 @@
 // directly. The goal: surface the real Postgres message wherever GoTrue/
 // PostgREST actually provides one, instead of a hardcoded generic string.
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthErrorMapper {
@@ -76,14 +77,30 @@ class AuthErrorMapper {
     // RLS refusals (a blocked member messaging you, a suspended account
     // writing, etc.) otherwise surface Postgres' own "new row violates
     // row-level security policy for table ..." text verbatim.
-    if (e.code == '42501') {
-      return "That action isn't allowed right now.";
+    switch (e.code) {
+      case '42501':
+        return "That action isn't allowed right now.";
+      case '23505':
+        return "That's already been added.";
+      case '23503':
+        return 'That item no longer exists.';
+      case '23514':
+        return "Some of those details aren't valid. Please check and try again.";
+      case '23502':
+        return 'Something required was missing. Please fill in every field.';
+      case 'P0001':
+        // A plpgsql `raise exception` with no errcode. These are written for
+        // the user on purpose - enforce_student_domain's "Students must use a
+        // valid Richfield or AAA institutional email address", for one - so
+        // this is the one case where the database's own wording is the right
+        // thing to show.
+        return e.message;
     }
-    final parts = <String>[e.message];
-    if (e.hint != null && e.hint!.isNotEmpty) {
-      parts.add(e.hint!);
-    }
-    return parts.join(' ');
+    // Everything else used to be returned verbatim, which is how Postgres'
+    // own wording ("new row violates ...", constraint names, table names)
+    // reached the screen. Log it, show one clean line.
+    debugPrint('Postgrest ${e.code}: ${e.message}${e.hint == null ? '' : ' (${e.hint})'}');
+    return 'Something went wrong. Please try again.';
   }
 
   /// Convenience for a try/catch that doesn't know which kind it caught.

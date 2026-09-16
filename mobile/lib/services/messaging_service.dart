@@ -142,4 +142,36 @@ class MessagingService {
         .eq('payload->>sender_id', partnerId)
         .isFilter('read_at', null);
   }
+
+  /// Files a report against one received message (migration 050).
+  ///
+  /// The message text is sent with the report because administrators cannot
+  /// read `messages` - that table has no admin SELECT policy - so an id on
+  /// its own would point the reviewer at a row they are unable to open.
+  Future<void> reportMessage({
+    required ChatMessage message,
+    required String reason,
+  }) async {
+    final me = _client.auth.currentUser?.id;
+    if (me == null) {
+      throw StateError('You need to be signed in to report a message.');
+    }
+    final snippet = message.body.trim();
+    // Re-selecting the row is what distinguishes a real insert from an RLS
+    // refusal, which PostgREST otherwise reports as a success with no rows.
+    final inserted = await _client
+        .from('content_reports')
+        .insert({
+          'content_id': message.id,
+          'content_type': 'message',
+          'reason': reason,
+          'reported_by': me,
+          'content_snippet':
+              snippet.length > 2000 ? snippet.substring(0, 2000) : snippet,
+        })
+        .select('id');
+    if (inserted.isEmpty) {
+      throw StateError('That report could not be filed.');
+    }
+  }
 }

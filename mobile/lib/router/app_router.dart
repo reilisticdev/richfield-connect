@@ -107,11 +107,10 @@ GoRouter buildAppRouter(AuthService authService) {
       }
 
       // Profile-level gates a session alone can't tell you (pending
-      // approval, suspension, admin-only routes). A null profile here means
-      // a transient fetch failure; stay on the current route.
+      // approval, suspension). A null profile here means a transient fetch
+      // failure; stay on the current route.
       if (profile != null) {
         final accountStatus = profile['account_status'] as String?;
-        final role = profile['role'] as String?;
 
         if (accountStatus == 'pending' && state.matchedLocation != '/pending-approval') {
           return '/pending-approval';
@@ -124,9 +123,6 @@ GoRouter buildAppRouter(AuthService authService) {
         // the AuthException branch above signs the device out.
         if (accountStatus == 'suspended' && state.matchedLocation != '/account-suspended') {
           return '/account-suspended';
-        }
-        if (state.matchedLocation.startsWith('/admin') && role != 'administrator') {
-          return '/home'; // not an admin — bounce, don't 403 silently
         }
       }
 
@@ -158,7 +154,6 @@ GoRouter buildAppRouter(AuthService authService) {
         builder: (context, state) => AccountStatusScreen(authService: authService, status: 'suspended'),
       ),
       GoRoute(path: '/home', builder: (context, state) => _HomeGate(authService: authService)),
-      GoRoute(path: '/admin', builder: (context, state) => const AdminHomeScreenPlaceholder()),
       GoRoute(path: '/', redirect: (context, state) => '/home'),
     ],
   );
@@ -224,13 +219,6 @@ class _HomeGate extends StatelessWidget {
 }
 
 // --- Placeholders: swap these for Kesh's actual screen widgets. ---
-class _PlaceholderScreen extends StatelessWidget {
-  const _PlaceholderScreen(this.label);
-  final String label;
-  @override
-  Widget build(BuildContext context) => Scaffold(body: Center(child: Text(label)));
-}
-
 /// Where a signed-in account that isn't active lands: waiting for approval,
 /// not approved, or suspended by an administrator. Each explains the state
 /// and offers Sign out, so nobody is stuck on a blank screen.
@@ -431,6 +419,3 @@ class _BusinessDocumentUploadState extends State<_BusinessDocumentUpload> {
   }
 }
 
-class AdminHomeScreenPlaceholder extends _PlaceholderScreen {
-  const AdminHomeScreenPlaceholder() : super('Admin');
-}

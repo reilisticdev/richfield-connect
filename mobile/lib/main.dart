@@ -1215,6 +1215,17 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
     } catch (e) {
+      // A suspended account is banned in GoTrue (migration 033), so sign-in
+      // fails here rather than anywhere a session exists. An inline red line
+      // is the wrong register for "your account has been paused" - this gets
+      // an explanation and a way forward instead.
+      if (e is AuthException && e.message.toLowerCase().contains('banned')) {
+        if (mounted) {
+          setState(() => _submitting = false);
+          await _showSuspendedDialog();
+        }
+        return;
+      }
       setState(() {
         _errorMessage = AuthErrorMapper.fromAny(e);
         if (e is AuthException && e.message.toLowerCase().contains('not confirmed')) {
@@ -1224,6 +1235,41 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  /// The reason an administrator recorded is deliberately NOT shown here.
+  /// Users.jsx captures it as "kept in the admin log", it can name other
+  /// people or reference internal tickets, and surfacing it would need an
+  /// endpoint that tells any caller whether a given email is suspended and
+  /// why. The member gets a respectful explanation and a route onward.
+  Future<void> _showSuspendedDialog() async {
+    final router = GoRouter.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('This account is suspended'),
+        content: Text(
+          'A Richfield administrator has paused access to this account, so you '
+          'can\'t sign in at the moment.\n\n'
+          'If you think this is a mistake, please contact Richfield and they can '
+          'review it with you.',
+          style: AppText.bodyMd(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialog);
+              router.go('/signup');
+            },
+            child: Text('Go to sign up'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1295,7 +1341,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSpacing: AppSpace.sm,
                 crossAxisSpacing: AppSpace.sm,
                 childAspectRatio: 2.4,
-                children: RichfieldRole.values.map((role) {
+                // Administrator is deliberately absent: governance moved to
+                // the React web console, so the app no longer offers an admin
+                // sign-in affordance. The tile only picks the email label and
+                // hint anyway - the real role comes from profiles.role - so an
+                // existing admin account is still routed correctly if one signs
+                // in, and lands on the "use the web console" screen.
+                children: RichfieldRole.values
+                    .where((role) => role != RichfieldRole.admin)
+                    .map((role) {
                   final selected = role == _selectedRole;
                   return _RoleTile(
                     role: role,
