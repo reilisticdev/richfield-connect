@@ -523,6 +523,26 @@
   color: #fcd34d;
 }
 
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.show-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #64748b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dark .show-archived-toggle {
+  color: #94a3b8;
+}
+
 .moderation-table {
   width: 100%;
 }
