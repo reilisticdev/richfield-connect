@@ -1,0 +1,10 @@
+# Project brief for AI assistants — lives outside the repo per-machine (see the
+# file's own "working across more than one machine" note), never committed here.
+CLAUDE.md
+
+# OS / IDE junk
+.DS_Store
+.idea/
+
+# Personal scratch notes
+docs/miscellaneous.txt

@@ -57,3 +57,8 @@ app.*.map.json
 # going forward; if it needs to be gone from history too, that's a
 # separate, disruptive history-rewrite operation, not done here.
 android/app/google-services.json
+
+# iOS counterpart of the file above — same class of secret (a real API key +
+# project identifiers). Added here proactively, before it's ever downloaded
+# from the Firebase console, so it can't repeat the incident described above.
+ios/Runner/GoogleService-Info.plist
