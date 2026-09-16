@@ -1,0 +1,345 @@
+{
+  "name": "Stale Event Cleanup \u2014 Richfield Connect",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 0,
+              "triggerAtMinute": 15
+            }
+          ]
+        }
+      },
+      "id": "daily_at_0015",
+      "name": "Daily at 00:15",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "adminEmailsRaw",
+              "value": "={{ $env.ADMIN_DIGEST_EMAILS }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "fromAddress",
+              "value": "={{ $env.DIGEST_FROM_EMAIL }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cfg_configuration",
+      "name": "\u2699\ufe0f Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A single, consistent \"now\" used both to select which events are stale\n// and to stamp `archived_at` on the rows we update - avoids any drift\n// between \"what we queried for\" and \"what we wrote\".\n\nconst config = $('\u2699\ufe0f Configuration').first().json;\n\nreturn [{\n  json: {\n    ...config,\n    nowTimestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "compute_now_timestamp",
+      "name": "Compute Now Timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/events",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "event_date",
+              "value": "=lt.{{ $json.nowTimestamp }}"
+            },
+            {
+              "name": "archived_at",
+              "value": "is.null"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ archived_at: $json.nowTimestamp }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "archive_stale_events_supabase",
+      "name": "Archive Stale Events (Supabase)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalises the PATCH response (Prefer: return=representation) into a\n// single item, regardless of whether n8n auto-split the JSON array\n// response into multiple items or returned it as one item containing\n// the whole array. An empty array here just means nothing was stale.\n\nconst raw = $input.all();\nlet events;\n\nif (raw.length === 1 && Array.isArray(raw[0].json)) {\n  events = raw[0].json;\n} else {\n  events = raw.map(i => i.json).filter(j => j && Object.keys(j).length > 0);\n}\n\nreturn [{\n  json: {\n    events,\n    count: events.length\n  }\n}];"
+      },
+      "id": "aggregate_archived_events",
+      "name": "Aggregate Archived Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "any_events_archived",
+      "name": "Any Events Archived?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the HTML body for the \"events archived\" notification.\n// Adjust the field names below to match your actual `events` columns\n// if they differ - see the README.\n\nconst { events } = $json;\nconst config = $('\u2699\ufe0f Configuration').first().json;\n\nfunction fmt(ts) {\n  return ts ? new Date(ts).toLocaleString() : '\u2014';\n}\n\nconst rows = events.map(e => {\n  const title    = e.title || e.name || e.event_name || '(untitled event)';\n  const eventDate= e.date || e.event_date || e.start_date;\n  const location = e.location || e.campus || e.venue || '\u2014';\n\n  return `\n    <tr>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${title}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${fmt(eventDate)}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${location}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:12px;\">${e.id}</td>\n    </tr>`;\n}).join('');\n\nconst html = `\n  <div style=\"font-family:Arial,sans-serif;max-width:640px;margin:0 auto;\">\n    <h2 style=\"color:#1e3a8a;\">Stale Events Archived</h2>\n    <p style=\"color:#334155;\">\n      ${events.length} event(s) whose date has passed were automatically archived and removed\n      from the active event listings feed.\n    </p>\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      <thead>\n        <tr style=\"background:#f1f5f9;text-align:left;\">\n          <th style=\"padding:8px;\">Title</th>\n          <th style=\"padding:8px;\">Event Date</th>\n          <th style=\"padding:8px;\">Location</th>\n          <th style=\"padding:8px;\">Event ID</th>\n        </tr>\n      </thead>\n      <tbody>${rows}</tbody>\n    </table>\n    <p style=\"color:#64748b;font-size:12px;margin-top:16px;\">\n      Automated daily cleanup from the Richfield Connect moderation workflow. Archived events\n      are hidden from students but not deleted - restore from the admin console if one of\n      these was archived in error.\n    </p>\n  </div>`;\n\nconst recipients = (config.adminEmailsRaw || '')\n  .split(',')\n  .map(x => x.trim())\n  .filter(Boolean);\n\nreturn [{\n  json: {\n    html,\n    subject: `\ud83d\uddc4\ufe0f ${events.length} stale event${events.length === 1 ? '' : 's'} archived`,\n    recipients,\n    fromAddress: config.fromAddress\n  }\n}];"
+      },
+      "id": "build_notify_email_html",
+      "name": "Build Notify Email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RESEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: $json.fromAddress, to: $json.recipients, subject: $json.subject, html: $json.html }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "send_notify_email_resend",
+      "name": "Send Notify Email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        180
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "notified_\u2705",
+      "name": "Notified \u2705",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        180
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "nothing_stale_-_skip",
+      "name": "Nothing Stale \u2014 Skip",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 00:15": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Configuration": {
+      "main": [
+        [
+          {
+            "node": "Compute Now Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Now Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Archive Stale Events (Supabase)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archive Stale Events (Supabase)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Archived Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Archived Events": {
+      "main": [
+        [
+          {
+            "node": "Any Events Archived?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Events Archived?": {
+      "main": [
+        [
+          {
+            "node": "Build Notify Email HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing Stale \u2014 Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notify Email HTML": {
+      "main": [
+        [
+          {
+            "node": "Send Notify Email (Resend)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notify Email (Resend)": {
+      "main": [
+        [
+          {
+            "node": "Notified \u2705",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

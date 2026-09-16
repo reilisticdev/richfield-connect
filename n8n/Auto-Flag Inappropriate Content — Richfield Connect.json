@@ -1,0 +1,581 @@
+{
+  "name": "Auto-Flag Inappropriate Content — Richfield Connect",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "post-created",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c755cff9-f545-4095-b342-7c8f6c24c3f4",
+      "name": "Post Created (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1216,
+        208
+      ],
+      "webhookId": "post-created-moderation"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "keywordThreshold",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "2",
+              "name": "enableAiModeration",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "3",
+              "name": "aiModel",
+              "value": "gemini-2.0-flash",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5e6eb27-3324-4d79-a80a-7e9e604030f0",
+      "name": "⚙️ Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -992,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parses the incoming Database Webhook call and validates that it is\n// really a new-row INSERT on the `posts` table before doing any work.\n//\n// Works out of the box with Supabase \"Database Webhooks\", whose payload\n// shape is: { type, table, schema, record, old_record }.\n// If you're firing this from a Postgres trigger + pg_notify bridge or a\n// custom backend hook instead, just adjust the field paths below to match\n// whatever your bridge sends - the rest of the workflow doesn't care.\n\nconst body = $input.first().json.body ?? $input.first().json;\n\nconst isInsert   = body.type === 'INSERT';\nconst isPostsRow = body.table === 'posts';\nconst record     = body.record || {};\n\nconst content   = (record.content || record.text || record.caption || '').toString();\nconst mediaUrl  = record.media_url || record.video_url || null;\nconst mediaType = record.media_type || (mediaUrl ? 'media' : 'text');\n\nreturn [{\n  json: {\n    isValidEvent: Boolean(isInsert && isPostsRow && record.id),\n    postId:     record.id ?? null,\n    authorId:   record.author_id ?? record.user_id ?? null,\n    content,\n    mediaUrl,\n    mediaType,\n    createdAt:  record.created_at ?? new Date().toISOString()\n  }\n}];"
+      },
+      "id": "6775eec2-8e68-4498-be05-a457b2a6734b",
+      "name": "Parse & Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -768,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.isValidEvent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aec29ac2-ecd6-4996-82f9-996305cae9c8",
+      "name": "Valid Insert Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Keyword moderation pass ------------------------------------------\n// Fast, free, zero-latency first line of defence. Runs on every post\n// before the (paid, slower) AI check is even considered.\n//\n// IMPORTANT: The `hateSpeech` list is intentionally left empty in this\n// template. Hard-coding slurs into a shared repo is bad practice - most\n// teams instead (a) load a vetted list from a private config table /\n// environment variable at runtime, or (b) lean on the AI moderation step\n// below, or (c) call a dedicated classifier like Google's Perspective\n// API (see README \"Extending the hate-speech check\"). Populate\n// `hateSpeech` with your own reviewed list before the demo if you want a\n// keyword-only fallback for this category.\n\nconst config = $('⚙️ Configuration').first().json;\n\nconst KEYWORDS = {\n  harassment: [\n    'kill yourself', 'kys', 'you should die', 'i hope you die',\n    'worthless piece of', 'nobody likes you', 'end your life', 'ffs', 'Ffs'\n  ],\n  spam: [\n    'click here to win', 'guaranteed income', 'work from home $$$',\n    'free followers', 'act now', 'limited time offer', 'dm to buy followers'\n  ],\n  scam: [\n    'send bitcoin', 'wire transfer now', 'urgent payment required',\n    'send gift cards', 'crypto investment opportunity', 'claim your prize'\n  ],\n  profanity: [\n    'fuck', 'shit', 'bitch', 'asshole', 'bastard', 'ass', 'cunt', 'nigga', 'nigger', 'gay', 'fag', 'fagget'\n  ],\n  hateSpeech: [\n    // populate with your institution's vetted list - see note above\n  ]\n};\n\nconst SEVERITY = { harassment: 4, scam: 4, hateSpeech: 5, spam: 2, profanity: 1 };\n\nconst text = (($json.content || '') + '').toLowerCase();\n\nlet score = 0;\nconst matches = [];\n\nfor (const [category, terms] of Object.entries(KEYWORDS)) {\n  for (const term of terms) {\n    if (term && text.includes(term.toLowerCase())) {\n      score += SEVERITY[category] || 1;\n      matches.push({ category, term });\n    }\n  }\n}\n\nreturn [{\n  json: {\n    ...$json,\n    keywordScore: score,\n    keywordMatches: matches,\n    keywordFlagged: score >= config.keywordThreshold\n  }\n}];"
+      },
+      "id": "2f9340a9-cb97-473b-9713-7b962f1beef2",
+      "name": "Keyword Scan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.keywordFlagged }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d38bff03-3a47-4af5-b0fd-b325d1d8253e",
+      "name": "Keyword Threshold Exceeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('⚙️ Configuration').first().json.enableAiModeration }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.content.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6991d717-ed35-4bb0-a2be-8072958b2705",
+      "name": "AI Moderation Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        128,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the Gemini request body. Kept as its own node so the HTTP\n// Request node stays a simple, readable \"just send this\" call.\n\nconst post = $json;\n\nconst prompt = `You are a content-moderation classifier for a professional\nstudent/alumni networking platform (similar in tone to LinkedIn).\nClassify the following user post. Respond with ONLY a JSON object\n(no markdown, no commentary) matching exactly this shape:\n{\"flagged\": boolean, \"category\": \"harassment|hate_speech|spam|scam|nudity|violence|none\", \"severity\": 1-5, \"reason\": \"short human-readable reason\"}\n\nFlag content that is harassing, hateful, sexually explicit, violent,\na scam/phishing attempt, or clearly spam. Do NOT flag ordinary strong\nopinions, negative reviews, competitive banter, or normal profanity used\ncasually - this platform is used by adults and over-flagging erodes trust.\n\n=== POST CONTENT START ===\n${(post.content || '').slice(0, 4000)}\n=== POST CONTENT END ===`;\n\nreturn [{\n  json: {\n    ...post,\n    geminiRequestBody: {\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: {\n        temperature: 0,\n        responseMimeType: 'application/json'\n      }\n    }\n  }\n}];"
+      },
+      "id": "4e8f436e-3771-4548-b8ac-a8a0f2cca2af",
+      "name": "Prepare Gemini Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $('⚙️ Configuration').first().json.aiModel }}:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiRequestBody) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a461dcee-ca67-40a5-84d9-607fac8508a4",
+      "name": "Gemini Moderation Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        576,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parses Gemini's response. If anything about the AI call goes wrong\n// (bad JSON, safety block, network hiccup) we fail OPEN on the AI layer\n// - i.e. we do NOT flag the post just because the AI call broke, since\n// the keyword pass has already run and this is only the extra layer.\n// The error is still surfaced in `aiError` so you can alert on it.\n\nlet aiFlagged = false;\nlet aiCategory = 'none';\nlet aiSeverity = 0;\nlet aiReason = '';\nlet aiError = null;\n\ntry {\n  const candidates = $json.candidates || [];\n  const rawText = candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  const cleaned = rawText.replace(/```json|```/g, '').trim();\n  const parsed = JSON.parse(cleaned);\n\n  aiFlagged  = Boolean(parsed.flagged);\n  aiCategory = parsed.category || 'none';\n  aiSeverity = Number(parsed.severity) || 0;\n  aiReason   = parsed.reason || '';\n} catch (err) {\n  aiError = err.message;\n}\n\nconst post = $('Keyword Scan').first().json;\n\nreturn [{\n  json: {\n    ...post,\n    aiFlagged,\n    aiCategory,\n    aiSeverity,\n    aiReason,\n    aiError\n  }\n}];"
+      },
+      "id": "2ffeb02d-6742-4caa-ad28-4542f6df8fa0",
+      "name": "Parse Gemini Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.aiFlagged }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ecfe07e8-a883-4217-b283-362ca0279a1e",
+      "name": "AI Flagged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the content_reports insert payload when the KEYWORD pass is\n// what triggered the flag (AI step is skipped entirely in this branch).\n//\n// content_id/content_type match the live content_reports schema (verified\n// 2026-09-16) - the table has no post_id column, and content_type is\n// NOT NULL with a CHECK allowing only 'post'/'comment'/'video'.\n\nconst p = $json;\nconst topMatch = (p.keywordMatches || [])[0] || {};\n\nreturn [{\n  json: {\n    content_id: p.postId,\n    content_type: 'post',\n    reported_by: null, // NULL = system-generated report, exactly what the\n                        // Flagged Content queue is designed to accept\n    report_type: 'automated',\n    reason: `Keyword filter: matched \"${topMatch.term}\" (${topMatch.category}). ` +\n            `${p.keywordMatches.length} total match(es), score ${p.keywordScore}.`,\n    category: topMatch.category || 'other',\n    severity: p.keywordScore,\n    status: 'pending',\n    flagged_by: 'system:keyword-filter',\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "d150f36d-379c-44cf-8bd0-4374ced90108",
+      "name": "Prepare Report (Keyword Hit)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the content_reports insert payload when the AI (Gemini) pass\n// is what triggered the flag - i.e. the keyword pass found nothing, but\n// Gemini judged the content should be reviewed.\n//\n// content_id/content_type match the live content_reports schema (verified\n// 2026-09-16) - the table has no post_id column, and content_type is\n// NOT NULL with a CHECK allowing only 'post'/'comment'/'video'.\n\nconst p = $json;\n\nreturn [{\n  json: {\n    content_id: p.postId,\n    content_type: 'post',\n    reported_by: null, // system-generated report\n    report_type: 'automated',\n    reason: `AI moderation: ${p.aiReason || 'flagged by Gemini content check'}`,\n    category: p.aiCategory || 'other',\n    severity: p.aiSeverity || 3,\n    status: 'pending',\n    flagged_by: 'system:gemini-moderation',\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "25de083f-570f-4096-8779-6467bd098471",
+      "name": "Prepare Report (AI Hit)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/content_reports",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "5efa90e3-3863-4aa3-8643-ce1486e4fcc9",
+      "name": "Insert content_reports Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1472,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"flagged\", \"post_id\": $json.post_id, \"reason\": $json.reason } }}",
+        "options": {}
+      },
+      "id": "9bec4e80-9a99-4d9d-a4d1-4192c3de08a4",
+      "name": "Respond 200 (Flagged & Reported)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1696,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"ok\", \"flagged\": false } }}",
+        "options": {}
+      },
+      "id": "ed4b908c-a721-439e-b016-4b0666ce367f",
+      "name": "Respond 200 (No Action)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1248,
+        352
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Post Created (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Configuration": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Payload": {
+      "main": [
+        [
+          {
+            "node": "Valid Insert Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Insert Event?": {
+      "main": [
+        [
+          {
+            "node": "Keyword Scan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 (No Action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keyword Scan": {
+      "main": [
+        [
+          {
+            "node": "Keyword Threshold Exceeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keyword Threshold Exceeded?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report (Keyword Hit)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Moderation Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Report (Keyword Hit)": {
+      "main": [
+        [
+          {
+            "node": "Insert content_reports Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert content_reports Row": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 (Flagged & Reported)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Moderation Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Gemini Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 (No Action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "Gemini Moderation Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Moderation Check": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Result": {
+      "main": [
+        [
+          {
+            "node": "AI Flagged?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Flagged?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report (AI Hit)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 (No Action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Report (AI Hit)": {
+      "main": [
+        [
+          {
+            "node": "Insert content_reports Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "84d3161a-6d6e-4885-807f-925cb2009ecf",
+  "meta": {
+    "instanceId": "ad996219b7cf88c5002712ab8990c0270850aceb0baa12aefba8441ab7091053"
+  },
+  "nodeGroups": [],
+  "id": "1z6TWVrmVeFDL1JE",
+  "tags": []
+}
