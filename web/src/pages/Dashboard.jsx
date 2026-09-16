@@ -12,7 +12,8 @@ function Dashboard() {
     const fetchStats = async () => {
       setError(null);
 
-      const [ mau, pipeline, pendingClaims, flagged, publishedOpportunities, events,] = await Promise.all([
+      const [mau, pipeline, pendingClaims, flagged, publishedOpportunities, events] =
+        await Promise.all([
           supabase.rpc("get_admin_mau"),
           supabase.rpc("get_admin_business_pipeline"),
           supabase
@@ -20,12 +21,8 @@ function Dashboard() {
             .select("id", { count: "exact", head: true })
             .eq("status", "pending"),
           supabase.rpc("get_admin_flagged_content_count"),
-          supabase
-            .from("opportunities")
-            .select("id, status"),
-          supabase
-            .from("events")
-            .select("id, status"),
+          supabase.from("opportunities").select("id, status"),
+          supabase.from("events").select("id, status"),
         ]);
 
       const firstError = [
@@ -44,19 +41,19 @@ function Dashboard() {
       }
 
       const pendingBusinesses =
-        (pipeline.data || []).find((row) => row.status === "pending")
-          ?.total ?? 0;
- 
-      const pendingOpportunities =
-         (publishedOpportunities.data || []).filter(
-         (opportunity) => opportunity.status === "pending"
-         ).length;
+        (pipeline.data || []).find((row) => row.status === "pending")?.total ?? 0;
 
-      const publishedEvents =
-         (events.data || []).filter((event) => event.status === "published").length;
+      const pendingOpportunities = (publishedOpportunities.data || []).filter(
+        (opportunity) => opportunity.status === "pending"
+      ).length;
 
-      const draftEvents =
-         (events.data || []).filter((event) => event.status === "draft").length;
+      const publishedEvents = (events.data || []).filter(
+        (event) => event.status === "published"
+      ).length;
+
+      const draftEvents = (events.data || []).filter(
+        (event) => event.status === "draft"
+      ).length;
 
       if (!cancelled) {
         setStats({
@@ -65,13 +62,13 @@ function Dashboard() {
             Number(pendingBusinesses) + Number(pendingClaims.count ?? 0),
           flaggedContent: flagged.data ?? 0,
           publishedOpportunities: (publishedOpportunities.data || []).filter(
-             (opportunity) => opportunity.status === "approved"
-             ).length,
-             pendingOpportunities: pendingOpportunities,
+            (opportunity) => opportunity.status === "approved"
+          ).length,
+          pendingOpportunities,
           events: {
-              total: events.data?.length ?? 0,
-             published: publishedEvents,
-             drafts: draftEvents,
+            total: events.data?.length ?? 0,
+            published: publishedEvents,
+            drafts: draftEvents,
           },
         });
       }
@@ -114,29 +111,27 @@ function Dashboard() {
           description="Requires review"
         />
 
-       <StatCard
-         title="Opportunities"
-         value={
-           stats
-             ? stats.publishedOpportunities + stats.pendingOpportunities
-             : "—"
+        <StatCard
+          title="Opportunities"
+          value={
+            stats ? stats.publishedOpportunities + stats.pendingOpportunities : "—"
           }
-         description={
+          description={
             stats
-               ? `${stats.publishedOpportunities} Published · ${stats.pendingOpportunities} Pending`
-               : "Loading..."
+              ? `${stats.publishedOpportunities} Published · ${stats.pendingOpportunities} Pending`
+              : "Loading..."
           }
-       />
+        />
 
         <StatCard
-           title="Events"
-           value={stats ? stats.events.total : "—"}
-           description={
-             stats
-               ? `${stats.events.published} Published · ${stats.events.drafts} Drafts`
-               : "Loading..."
-           }
-         />
+          title="Events"
+          value={stats ? stats.events.total : "—"}
+          description={
+            stats
+              ? `${stats.events.published} Published · ${stats.events.drafts} Drafts`
+              : "Loading..."
+          }
+        />
       </div>
 
       <div className="dashboard-section">

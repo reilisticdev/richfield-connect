@@ -36,12 +36,15 @@ function Opportunities() {
   }, []);
 
   const updateOpportunityStatus = async (id, status) => {
-    const { error } = await supabase
+    // RLS turns a disallowed update into zero rows rather than an error, so
+    // ask for the updated row back and treat an empty result as a failure.
+    const { data, error } = await supabase
       .from("opportunities")
       .update({ status })
-      .eq("id", id);
+      .eq("id", id)
+      .select("id");
 
-    if (error) {
+    if (error || !data?.length) {
       console.error("Error updating opportunity:", error);
       setError("Could not update opportunity.");
       return;
