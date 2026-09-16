@@ -4863,39 +4863,25 @@ class _JobsScreenState extends State<JobsScreen> {
       final choice = await showDialog<String>(
         context: context,
         builder: (dialog) => AlertDialog(
-          title: Text('Apply without a CV?'),
-          content: Text('$company asks for a CV with applications, and yours '
-              'will stand out more with one attached. You can import it now, '
-              'or apply with your profile only.'),
+          title: Text('Missing CV'),
+          content: Text("You haven't uploaded a CV yet. Businesses prefer "
+              'applicants with a CV. Are you sure you want to apply without one?'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialog, 'cancel'),
-              child: Text('Not now'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialog, 'anyway'),
-              child: Text('Apply anyway'),
+              child: Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(dialog, 'import'),
-              child: Text('Import my CV'),
+              onPressed: () => Navigator.pop(dialog, 'anyway'),
+              child: Text('Apply Anyway'),
             ),
           ],
         ),
       );
-      if (choice == null || choice == 'cancel' || !mounted) return;
-      if (choice == 'import') {
-        await Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
-        if (!mounted) return;
-        try {
-          cvPath = (await _profileService.fetchCvStatus(studentId)).path;
-        } catch (_) {
-          cvPath = null;
-        }
-        if (!mounted) return;
-      }
-      warned = choice == 'anyway';
+      // Cancel, or dismissing the dialog, aborts. Apply Anyway proceeds and
+      // counts as the confirmation, so the dialog below is skipped.
+      if (choice != 'anyway' || !mounted) return;
+      warned = true;
     }
 
     final hasCv = cvPath != null;
