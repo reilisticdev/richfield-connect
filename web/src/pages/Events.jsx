@@ -1,6 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+// Same fixed list as the mobile app's campus dropdown (main.dart _campuses) -
+// keeps spelling consistent across both clients for the same free-text
+// campus concept used throughout (education, verification claims, events).
+const CAMPUSES = [
+  "Braamfontein",
+  "Cape Town",
+  "Durban",
+  "Pretoria",
+  "Nelspruit",
+  "Vereeniging",
+];
+
+// Per Miss Amishka's guidance: an admin creating an event or announcement
+// should never be able to pick a date before this year - catches the
+// classic "typed 2025 by habit" mistake.
+const MIN_EVENT_DATE = "2026-01-01";
+
 function formatLabel(value) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -79,18 +96,26 @@ function Events() {
        return;
       }
 
+     if (date < MIN_EVENT_DATE) {
+       setError("Event date can't be before 2026.");
+       return;
+     }
+
      const event_date = new Date(`${date}T${time}`).toISOString();
 
-    const { error } = await supabase
+    // RLS turns a disallowed update into zero rows rather than an error, so
+    // ask for the updated row back and treat an empty result as a failure.
+    const { data, error } = await supabase
       .from("events")
       .update({
          title,
          event_date,
          location,
        })
-      .eq("id", editingEventId);
+      .eq("id", editingEventId)
+      .select("id");
 
-    if (error) {
+    if (error || !data?.length) {
        console.error("Error updating event:", error);
        setError("Could not update event.");
        return;
@@ -109,6 +134,11 @@ function Events() {
     e.preventDefault();
 
     if (!title || !date || !time || !location) {
+      return;
+    }
+
+    if (date < MIN_EVENT_DATE) {
+      setError("Event date can't be before 2026.");
       return;
     }
 
@@ -261,6 +291,7 @@ function Events() {
               <input
                 type="date"
                 id="event-date"
+                min={MIN_EVENT_DATE}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
               />
@@ -278,13 +309,18 @@ function Events() {
 
             <div className="form-group">
               <label htmlFor="event-location">Location</label>
-              <input
-                type="text"
+              <select
                 id="event-location"
-                placeholder="Enter location"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-              />
+              >
+                <option value="">Select a campus</option>
+                {CAMPUSES.map((campus) => (
+                  <option key={campus} value={campus}>
+                    {campus}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

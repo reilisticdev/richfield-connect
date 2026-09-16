@@ -71,7 +71,7 @@ function Moderation() {
       .select(
         // `profiles:` aliases the admin_profiles embed so the JSX below keeps
         // reading claim.profiles.* unchanged.
-        "id, student_number, programme, campus, graduation_year, status, document_path, profiles:admin_profiles(first_name, last_name, email)"
+        "id, student_number, track_id, programme, campus, graduation_year, status, document_path, profiles:admin_profiles(first_name, last_name, email)"
       )
       .eq("status", "pending");
 
@@ -434,6 +434,9 @@ function Moderation() {
                     {claim.profiles?.first_name} {claim.profiles?.last_name}
                   </strong>
                   <small>Student no. {claim.student_number}</small>
+                  <small>
+                    Track ID: {claim.track_id || "not provided (pre-dates this field)"}
+                  </small>
                 </div>
 
                 <div>
