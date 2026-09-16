@@ -20,6 +20,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../main.dart' show AppColors, AppRadius, AppSpace, AppText, Pill, RoundedCard, SectionHeader;
 import '../services/auth_error_mapper.dart';
+import '../services/blocks_service.dart';
 import '../services/connections_service.dart';
 import '../services/profile_service.dart';
 import '../widgets/profile_avatar.dart';
@@ -46,8 +47,10 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
 
   final _client = Supabase.instance.client;
   late final _connections = ConnectionsService(_client);
+  late final _blocks = BlocksService(_client);
 
   bool _loading = true;
+  bool _blocked = false;
   String? _error;
   Map<String, dynamic>? _profile;
   List<Map<String, dynamic>> _skills = [];
@@ -130,6 +133,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
             .maybeSingle(),
         _client.from('profiles').select('role').eq('id', me).single(),
         _connections.load(me),
+        _isMe ? Future.value(false) : _blocks.hasBlocked(id),
       ]);
       if (!mounted) return;
 
@@ -148,6 +152,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
         _company = results[10] as Map<String, dynamic>?;
         _myRole = (results[11] as Map<String, dynamic>)['role'] as String? ?? '';
         _network = results[12] as NetworkSnapshot;
+        _blocked = results[13] as bool;
         _loading = false;
       });
 
@@ -190,6 +195,40 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       _snack(connectionErrorMessage(e));
     } finally {
       if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _toggleBlock(PersonSummary person) async {
+    final name = person.firstName.isEmpty ? 'this member' : person.firstName;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(_blocked ? 'Unblock $name?' : 'Block $name?'),
+        content: Text(_blocked
+            ? '$name will be able to message and send you a connection request again.'
+            : '$name won\'t be able to message you or send a connection request. This won\'t '
+                'affect an existing connection or delete any message history.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_blocked ? 'Unblock' : 'Block'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      if (_blocked) {
+        await _blocks.unblock(widget.profileId);
+      } else {
+        await _blocks.block(widget.profileId);
+      }
+      if (!mounted) return;
+      setState(() => _blocked = !_blocked);
+      _snack(_blocked ? 'Blocked $name.' : 'Unblocked $name.');
+    } catch (e) {
+      _snack(AuthErrorMapper.fromAny(e));
     }
   }
 
@@ -307,6 +346,17 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         title: Text(person?.name ?? 'Profile', style: AppText.headlineSm()),
+        actions: [
+          if (!_isMe && person != null)
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'block') _toggleBlock(person);
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'block', child: Text(_blocked ? 'Unblock' : 'Block')),
+              ],
+            ),
+        ],
       ),
       body: body,
     );
@@ -434,6 +484,22 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
   }
 
   Widget _actions() {
+    if (_blocked) {
+      return RoundedCard(
+        child: Row(
+          children: [
+            Icon(Icons.block, size: 18, color: AppColors.onSurfaceVariant),
+            const SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Text(
+                'You\'ve blocked this member. Unblock them from the menu above to message or connect again.',
+                style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final status = _network.statusWith(widget.profileId);
     final (label, icon, enabled) = switch (status) {
       RelationStatus.connected => ('Message', Icons.chat_bubble_outline, true),

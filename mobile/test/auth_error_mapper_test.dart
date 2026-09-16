@@ -59,4 +59,23 @@ void main() {
     final e = AuthException('User already registered', statusCode: '400');
     expect(AuthErrorMapper.fromAny(e), contains('already exists'));
   });
+
+  group('fromPostgrestException', () {
+    test('an RLS refusal (42501) is mapped, not shown as raw Postgres text', () {
+      final e = PostgrestException(
+        message: 'new row violates row-level security policy for table "messages"',
+        code: '42501',
+      );
+      final message = AuthErrorMapper.fromPostgrestException(e);
+      expect(message, isNot(contains('row-level security')));
+      expect(message, isNot(contains('violates')));
+    });
+
+    test('other Postgrest errors still surface the real message and hint', () {
+      final e = PostgrestException(message: 'duplicate key value', code: '23505', hint: 'Try a different value.');
+      final message = AuthErrorMapper.fromPostgrestException(e);
+      expect(message, contains('duplicate key value'));
+      expect(message, contains('Try a different value.'));
+    });
+  });
 }
