@@ -105,7 +105,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parses the incoming Database Webhook call and validates that it is\n// really a new-row INSERT on the `posts` table before doing any work.\n//\n// Works out of the box with Supabase \"Database Webhooks\", whose payload\n// shape is: { type, table, schema, record, old_record }.\n// If you're firing this from a Postgres trigger + pg_notify bridge or a\n// custom backend hook instead, just adjust the field paths below to match\n// whatever your bridge sends - the rest of the workflow doesn't care.\n\nconst body = $input.first().json.body ?? $input.first().json;\n\nconst isInsert   = body.type === 'INSERT';\nconst isPostsRow = body.table === 'posts';\nconst record     = body.record || {};\n\nconst content   = (record.content || record.text || record.caption || '').toString();\nconst mediaUrl  = record.media_url || record.video_url || null;\nconst mediaType = record.media_type || (mediaUrl ? 'media' : 'text');\n\nreturn [{\n  json: {\n    isValidEvent: Boolean(isInsert && isPostsRow && record.id),\n    postId:     record.id ?? null,\n    authorId:   record.author_id ?? record.user_id ?? null,\n    content,\n    mediaUrl,\n    mediaType,\n    createdAt:  record.created_at ?? new Date().toISOString()\n  }\n}];"
+        "jsCode": "// Parses the incoming Database Webhook call and validates that it is\n// really a new-row INSERT on the `posts` table before doing any work.\n//\n// Works out of the box with Supabase \"Database Webhooks\", whose payload\n// shape is: { type, table, schema, record, old_record }.\n// If you're firing this from a Postgres trigger + pg_notify bridge or a\n// custom backend hook instead, just adjust the field paths below to match\n// whatever your bridge sends - the rest of the workflow doesn't care.\n\nconst body = $('Post Created (Webhook)').first().json.body;\n\nconst isInsert   = body.type === 'INSERT';\nconst isPostsRow = body.table === 'posts';\nconst record     = body.record || {};\n\nconst content   = (record.content || record.text || record.caption || record.body || '').toString();\nconst mediaUrl  = record.media_url || record.video_url || null;\nconst mediaType = record.media_type || (mediaUrl ? 'media' : 'text');\n\nreturn [{\n  json: {\n    isValidEvent: Boolean(isInsert && isPostsRow && record.id),\n    postId:     record.id ?? null,\n    authorId:   record.author_id ?? record.user_id ?? null,\n    content,\n    mediaUrl,\n    mediaType,\n    createdAt:  record.created_at ?? new Date().toISOString()\n  }\n}];"
       },
       "id": "6775eec2-8e68-4498-be05-a457b2a6734b",
       "name": "Parse & Validate Payload",
@@ -380,7 +380,7 @@
             },
             {
               "name": "Prefer",
-              "value": "return=minimal"
+              "value": "return=representation"
             }
           ]
         },
@@ -403,7 +403,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { \"status\": \"flagged\", \"post_id\": $json.post_id, \"reason\": $json.reason } }}",
+        "responseBody": "={{ { \"status\": \"flagged\", \"post_id\": (Array.isArray($json) ? $json[0] : $json).content_id, \"reason\": (Array.isArray($json) ? $json[0] : $json).reason } }}",
         "options": {}
       },
       "id": "9bec4e80-9a99-4d9d-a4d1-4192c3de08a4",
