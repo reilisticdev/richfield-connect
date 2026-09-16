@@ -1647,16 +1647,59 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return null;
   }
 
+  /// Same range _yearProblem() accepts (1970 to now+8), newest first since
+  /// most people registering studied recently. A tap-to-pick sheet rather
+  /// than a free-text box, so a typo inside the valid range - the actual gap
+  /// the free-text field left open - can't happen.
+  Future<void> _pickYear(TextEditingController controller, {required String title}) async {
+    final latest = DateTime.now().year + 8;
+    final years = [for (var y = latest; y >= 1970; y--) y];
+    final current = int.tryParse(_text(controller));
+    final selected = await _scrollSafeSheet<int>(
+      context,
+      builder: (sheet) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(AppSpace.base, AppSpace.base, AppSpace.base, AppSpace.xs),
+            child: Text(title, style: AppText.headlineSm()),
+          ),
+          for (final y in years)
+            ListTile(
+              title: Text('$y'),
+              trailing: y == current ? Icon(Icons.check, color: AppColors.primary) : null,
+              onTap: () => Navigator.pop(sheet, y),
+            ),
+          SizedBox(height: AppSpace.sm),
+        ],
+      ),
+    );
+    if (selected != null) setState(() => controller.text = '$selected');
+  }
+
   /// The first thing missing or invalid for the selected account type. The
   /// required fields are the ones migration 028 needs to create the row: a
   /// student's education (programme, campus, start year), an alumnus's
+  /// Mirrors enforce_student_domain() (migration 043): a real local part, no
+  /// bare dots, still domain-locked. Client-side so a student sees the
+  /// problem immediately instead of after a round trip to the database
+  /// trigger; the trigger is still what actually enforces it.
+  static final _studentEmailPattern =
+      RegExp(r'^[a-z0-9]([a-z0-9._%+-]*[a-z0-9])?@(my\.)?(richfield|aaa)\.ac\.za$', caseSensitive: false);
+
   /// verification claim (student number, programme, campus, graduation year)
   /// and a business profile (company name).
   String? _validate() {
-    if (_text(_fullNameController).isEmpty) return 'Enter your full name.';
+    final fullName = _text(_fullNameController);
+    if (fullName.isEmpty) return 'Enter your full name.';
+    if (!fullName.trim().contains(' ')) return 'Enter your first and last name.';
     if (_text(_emailController).isEmpty) return 'Enter your email address.';
     switch (_tab) {
       case 0:
+        if (!_studentEmailPattern.hasMatch(_text(_emailController).trim())) {
+          return 'Enter a valid Richfield or AAA student email address.';
+        }
         if (_text(_programmeController).isEmpty) return 'Enter your programme.';
         return _yearProblem('Year started', _enrolmentYearController, required: true) ??
             _yearProblem('Graduation year', _graduationYearController, required: false) ??
@@ -2044,14 +2087,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', alumni ? '2017' : '2024', Icons.event_outlined,
-                controller: _enrolmentYearController, keyboardType: TextInputType.number),
+            child: _labeledField(alumni ? 'Year started (optional)' : 'Year started', 'Tap to choose', Icons.event_outlined,
+                controller: _enrolmentYearController,
+                readOnly: true,
+                onTap: () => _pickYear(_enrolmentYearController, title: 'Year started')),
           ),
           SizedBox(width: AppSpace.sm),
           Expanded(
-            child: _labeledField(alumni ? 'Graduation year' : 'Graduating (optional)', alumni ? '2021' : '2027',
+            child: _labeledField(alumni ? 'Graduation year' : 'Graduating (optional)', 'Tap to choose',
                 Icons.calendar_today_outlined,
-                controller: _graduationYearController, keyboardType: TextInputType.number),
+                controller: _graduationYearController,
+                readOnly: true,
+                onTap: () => _pickYear(_graduationYearController, title: 'Graduation year')),
           ),
         ],
       ),
@@ -2060,7 +2107,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _labeledField(String label, String hint, IconData icon,
-      {TextEditingController? controller, bool obscureText = false, TextInputType? keyboardType}) {
+      {TextEditingController? controller,
+      bool obscureText = false,
+      TextInputType? keyboardType,
+      bool readOnly = false,
+      VoidCallback? onTap}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2070,6 +2121,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           controller: controller,
           obscureText: obscureText,
           keyboardType: keyboardType,
+          readOnly: readOnly,
+          onTap: onTap,
           decoration: InputDecoration(
             prefixIcon: Icon(icon, size: 18),
             hintText: hint,
