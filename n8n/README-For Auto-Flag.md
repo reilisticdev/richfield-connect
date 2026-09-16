@@ -16,7 +16,7 @@ buttons.
 
 ## Files
 
-- `auto-flag-content-workflow.json` — the importable n8n workflow (16 nodes)
+- `auto-flag-content-workflow.json` — the importable n8n workflow (18 nodes)
 - `README.md` — this file
 
 ## How it works
@@ -24,15 +24,17 @@ buttons.
 | Step | Node(s) | What happens |
 |---|---|---|
 | 1 | **Post Created (Webhook)** | Receives the DB webhook call fired on `posts` INSERT |
-| 2 | **⚙️ Configuration** | Single place to tune thresholds without touching code |
-| 3 | **Parse & Validate Payload** | Confirms it's really a new `posts` row, extracts content |
-| 4 | **Keyword Scan** | Free, instant check against harassment/spam/scam/profanity term lists |
-| 5 | **Keyword Threshold Exceeded?** | If score ≥ threshold → skip straight to filing a report |
-| 6 | **AI Moderation Enabled?** | If keywords found nothing, optionally escalate to Gemini |
-| 7 | **Gemini Moderation Check** | Asks Gemini to classify the post (flagged/category/severity/reason) |
-| 8 | **Prepare Report (…)** | Builds the `content_reports` insert payload with a human-readable reason |
-| 9 | **Insert content_reports Row** | `POST` to Supabase's REST API (PostgREST) with `reported_by: null` |
-| 10 | **Respond 200 (…)** | Acknowledges the webhook so the DB doesn't retry |
+| 2 | **Verify Webhook Secret** | Rejects the request outright (see step 10a) unless the `x-webhook-secret` header matches `N8N_WEBHOOK_SECRET` — runs before any parsing, keyword scanning, or database write |
+| 3 | **⚙️ Configuration** | Single place to tune thresholds without touching code |
+| 4 | **Parse & Validate Payload** | Confirms it's really a new `posts` row, extracts content |
+| 5 | **Keyword Scan** | Free, instant check against harassment/spam/scam/profanity term lists |
+| 6 | **Keyword Threshold Exceeded?** | If score ≥ threshold → skip straight to filing a report |
+| 7 | **AI Moderation Enabled?** | If keywords found nothing, optionally escalate to Gemini |
+| 8 | **Gemini Moderation Check** | Asks Gemini to classify the post (flagged/category/severity/reason) |
+| 9 | **Prepare Report (…)** | Builds the `content_reports` insert payload with a human-readable reason |
+| 10 | **Insert content_reports Row** | `POST` to Supabase's REST API (PostgREST) with `reported_by: null` |
+| 10a | **Respond 401 (Unauthorized)** | What an unverified request gets instead — no parsing or DB access ever happens for it |
+| 11 | **Respond 200 (…)** | Acknowledges the webhook so the DB doesn't retry |
 
 The keyword pass and the AI pass are independent layers: keyword matches file a report
 immediately (cheapest, fastest); if nothing matches, Gemini gets one shot to catch things a
@@ -54,6 +56,7 @@ them, so nothing sensitive lives in the JSON file. Set these on your n8n instanc
 | `SUPABASE_URL` | Supabase project → Settings → API → Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase project → Settings → API → `service_role` key (needed to bypass RLS for a system insert — keep this secret, server-side only) |
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey) |
+| `N8N_WEBHOOK_SECRET` | Any value you generate yourself (e.g. `openssl rand -hex 32`) — this is what the **Verify Webhook Secret** node checks against. Store the same value in Supabase Vault (`admin_upsert_vault_secret`) rather than typing it into a migration file, matching how this project already handles the edge-function webhook secret. |
 
 If you're self-hosting n8n via Docker, add them to your `docker-compose.yml` under
 `environment:`, or a `.env` file it loads from.
@@ -67,6 +70,9 @@ In Supabase: **Database → Webhooks → Create a new webhook**
   once the workflow is **Active**) — it will look like
   `https://<your-n8n-host>/webhook/post-created`
 - Method: `POST`
+- **Headers: add `x-webhook-secret` set to the same value as `N8N_WEBHOOK_SECRET`** — this is
+  what the **Verify Webhook Secret** node checks. Without this header the webhook still fires,
+  but every request gets a 401 and nothing is ever parsed, scanned, or written.
 
 > Not on Supabase? Any mechanism that fires an HTTP POST on insert works — a Postgres
 > `AFTER INSERT` trigger calling `pg_net.http_post`, a Firestore Cloud Function, or your own
@@ -127,6 +133,7 @@ own, not something to bake into a shared repo. Two solid options for the demo/pr
 | Symptom | Likely cause |
 |---|---|
 | Webhook never fires | Workflow isn't **Active**, or Supabase webhook is pointed at the Test URL instead of the Production URL |
+| Every request gets a 401 | Supabase's webhook config is missing the `x-webhook-secret` header, or its value doesn't match `N8N_WEBHOOK_SECRET` exactly |
 | Every post gets flagged | `keywordThreshold` too low, or Gemini's `temperature` isn't `0` (already set to `0` here for consistency) |
 | Gemini node errors out | Check `GEMINI_API_KEY` is set and the model name in Configuration matches an available Gemini model |
 | Insert to `content_reports` fails with 401/403 | You're using the `anon` key instead of `service_role`, or Row-Level Security is blocking the insert — `service_role` bypasses RLS by design |
