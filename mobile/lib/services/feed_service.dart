@@ -77,6 +77,12 @@ class FeedService {
         .select('id, title, description, event_date, location')
         .eq('status', 'published')
         .gte('event_date', DateTime.now().toUtc().toIso8601String())
+        // Belt-and-suspenders alongside the date filter above: the
+        // stale-event-cleanup n8n workflow only ever archives events whose
+        // date has already passed, so this filter has no effect on a normal
+        // run today - it just stops depending solely on "is the date in the
+        // past" staying the only signal for "should this be hidden".
+        .isFilter('archived_at', null)
         .order('event_date', ascending: true)
         .limit(limit);
     return List<Map<String, dynamic>>.from(rows as List);
