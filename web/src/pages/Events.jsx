@@ -180,12 +180,16 @@ function Events() {
   };
 
   const publishEvent = async (id) => {
-    const { error } = await supabase
+    // Re-select the row: RLS turns a disallowed update into zero rows rather
+    // than an error, so without this the card would flip to "published" while
+    // the database still had it as a draft.
+    const { data: published, error } = await supabase
       .from("events")
       .update({ status: "published" })
-      .eq("id", id);
+      .eq("id", id)
+      .select("id");
 
-    if (error) {
+    if (error || !published?.length) {
       console.error("Error publishing event:", error);
       setError("Could not publish event.");
       return;
@@ -233,12 +237,17 @@ function Events() {
   const restoreEvent = async (id) => {
     setError(null);
 
-    const { error } = await supabase
+    // Same guard as publish/delete above. This one matters most: restore is
+    // the counterpart to the n8n Stale Event Cleanup workflow's archiving, so
+    // a silent no-op here would leave an event the admin believes they have
+    // brought back still archived and still hidden from both clients.
+    const { data: restored, error } = await supabase
       .from("events")
       .update({ archived_at: null })
-      .eq("id", id);
+      .eq("id", id)
+      .select("id");
 
-    if (error) {
+    if (error || !restored?.length) {
       console.error("Error restoring event:", error);
       setError("Could not restore event.");
       return;

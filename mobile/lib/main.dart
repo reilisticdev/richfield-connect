@@ -1655,6 +1655,26 @@ class RegisterScreen extends StatefulWidget {
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
+/// CIPC issues company registration numbers as YYYY/NNNNNN/NN. Returns the
+/// canonical form, or null when the input isn't one.
+///
+/// Punctuation is stripped before checking, so a number typed without the
+/// slashes is accepted and normalised rather than refused - the same call
+/// migration 043 makes about student addresses, where rejecting a legitimate
+/// value on stage is worse than being slightly lenient. What it does catch is
+/// the actually-wrong input: a company name, a phone number, a digit miscount
+/// or a year that cannot be a registration year.
+///
+/// Top level rather than a method on the private State class so it is
+/// reachable from a test.
+String? normalisedRegistrationNumber(String raw) {
+  final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+  if (digits.length != 12) return null;
+  final year = int.tryParse(digits.substring(0, 4));
+  if (year == null || year < 1900 || year > DateTime.now().year) return null;
+  return '${digits.substring(0, 4)}/${digits.substring(4, 10)}/${digits.substring(10)}';
+}
+
 class _RegisterScreenState extends State<RegisterScreen> {
   int _tab = 0; // 0 = Student, 1 = Alumni, 2 = Employer
   bool _agreed = false;
@@ -1883,12 +1903,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _yearOrderProblem();
       default:
         if (_text(_companyNameController).isEmpty) return 'Enter your company name.';
-        if (_text(_registrationNumberController).isEmpty) {
+        final registration = _text(_registrationNumberController);
+        if (registration.isEmpty) {
           return 'Enter your company\'s registration number.';
+        }
+        if (normalisedRegistrationNumber(registration) == null) {
+          return 'Enter the registration number the way CIPC issues it, '
+              'e.g. 2019/123456/07.';
         }
         return null;
     }
   }
+
 
   /// Only the fields this account type's form shows, and only filled-in ones.
   Map<String, Object> _details() {
@@ -1900,7 +1926,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_tab == 2) {
       put('company_name', _companyNameController);
-      put('registration_number', _registrationNumberController);
+      // Stored canonical, so an admin reviewing two businesses that typed the
+      // same number differently still sees one consistent format.
+      final registration =
+          normalisedRegistrationNumber(_text(_registrationNumberController));
+      if (registration != null) details['registration_number'] = registration;
       put('industry', _industryController);
       put('location', _locationController);
     } else {
@@ -2241,7 +2271,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             controller: _companyNameController),
         gap(),
         _labeledField(
-            'Registration number', 'CIPC company registration number', Icons.badge_outlined,
+            'Registration number', 'e.g. 2019/123456/07', Icons.badge_outlined,
             controller: _registrationNumberController),
         gap(),
         _labeledField('Industry (optional)', 'Software engineering and data', Icons.business_center_outlined,
