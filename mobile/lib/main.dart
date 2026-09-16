@@ -401,6 +401,14 @@ class _RichfieldConnectAppState extends State<RichfieldConnectApp> {
       );
 
       return MaterialApp.router(
+      // AppColors reads ThemeController.isDark, a plain static, so widgets
+      // styled from it register no dependency on the Theme InheritedWidget.
+      // On a toggle only Theme.of(context) consumers (Scaffold's background)
+      // rebuilt, leaving hand-styled text and cards painted in the previous
+      // mode's colours - white-on-white titles, navy cards, in light mode.
+      // Re-keying on isDark discards the stale element tree so every
+      // AppColors getter is re-read. Fires only on toggle, not per frame.
+      key: ValueKey(isDark),
       title: 'Richfield Graduate Network',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -1540,7 +1548,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // No campuses lookup table exists (education.campus is free text). A fixed
   // list keeps the spelling consistent, which matters now that the campus is
   // saved and programme comparisons group students by what they entered.
-  static const _campuses = ['Braamfontein', 'Cape Town', 'Durban', 'Pretoria', 'Nelspruit', 'Vereeniging'];
+  // These are Richfield's actual campuses; the previous list was invented
+  // (Braamfontein/Durban/Nelspruit/Vereeniging are not Richfield campuses).
+  static const campuses = [
+    'Bryanston',
+    'Newtown Junction',
+    'Centurion',
+    'Pretoria',
+    'Umhlanga',
+    'Musgrave',
+    'Cape Town',
+    'Polokwane',
+  ];
+  static const _campuses = campuses;
   String _campus = _campuses.first;
 
   static final _fourDigits = RegExp(r'^\d{4}$');
@@ -1699,6 +1719,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (fullName.isEmpty) return 'Enter your full name.';
     if (!fullName.trim().contains(' ')) return 'Enter your first and last name.';
     if (_text(_emailController).isEmpty) return 'Enter your email address.';
+    // The field has always been labelled "At least 8 characters" but nothing
+    // checked it here, so GoTrue's own 6-character floor was the real rule
+    // and a 6-character password was accepted despite the label.
+    if (_passwordController.text.length < 8) {
+      return 'Your password must be at least 8 characters.';
+    }
     switch (_tab) {
       case 0:
         if (!_studentEmailPattern.hasMatch(_text(_emailController).trim())) {
@@ -4679,12 +4705,45 @@ class _JobsScreenState extends State<JobsScreen> {
     final company = (companyRaw == null || companyRaw.isEmpty) ? 'the employer' : companyRaw;
 
     String? cvPath;
+    var cvCheckFailed = false;
     try {
       cvPath = (await _profileService.fetchCvStatus(studentId)).path;
     } catch (_) {
-      // Can't read the CV status: apply without it rather than block.
+      cvCheckFailed = true;
     }
     if (!mounted) return;
+
+    // A CV is required to apply. Enforced only when the lookup succeeded and
+    // genuinely came back empty - a failed lookup must not block someone who
+    // does have one on file, so that case still falls through to the confirm.
+    if (cvPath == null && !cvCheckFailed) {
+      final importNow = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text('A CV is required'),
+          content: Text('$company needs a CV with this application. Import one '
+              'and it will be attached for you.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialog, true),
+              child: Text('Import my CV'),
+            ),
+          ],
+        ),
+      );
+      if (importNow != true || !mounted) return;
+      await Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const CvImportScreen()));
+      if (!mounted) return;
+      try {
+        cvPath = (await _profileService.fetchCvStatus(studentId)).path;
+      } catch (_) {
+        cvPath = null;
+      }
+      if (!mounted || cvPath == null) return;
+    }
 
     final hasCv = cvPath != null;
     final confirmed = await showDialog<bool>(
@@ -4694,8 +4753,8 @@ class _JobsScreenState extends State<JobsScreen> {
         content: Text(hasCv
             ? 'Your CV on file will be shared with $company for this application, '
                 'along with your profile.'
-            : 'You have no CV on file, so $company will see your profile only. '
-                'You can add one under Career AI → Import my CV and apply afterwards.'),
+            : 'We could not confirm your CV just now, so $company may see your '
+                'profile only.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text('Not now')),
           FilledButton(

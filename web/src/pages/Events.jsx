@@ -5,13 +5,24 @@ import { supabase } from "../lib/supabase";
 // keeps spelling consistent across both clients for the same free-text
 // campus concept used throughout (education, verification claims, events).
 const CAMPUSES = [
-  "Braamfontein",
-  "Cape Town",
-  "Durban",
+  "Bryanston",
+  "Newtown Junction",
+  "Centurion",
   "Pretoria",
-  "Nelspruit",
-  "Vereeniging",
+  "Umhlanga",
+  "Musgrave",
+  "Cape Town",
+  "Polokwane",
 ];
+
+// Events created before the list was corrected hold locations that are not
+// options any more ("Braamfontein Campus", "Durban, Umhlanga"). Without this
+// the edit form would render a blank select and silently rewrite the location
+// on the next save, so the stored value is offered alongside the real ones.
+const campusOptions = (current) => {
+  const value = (current ?? "").trim();
+  return value && !CAMPUSES.includes(value) ? [...CAMPUSES, value] : CAMPUSES;
+};
 
 // Per Miss Amishka's guidance: an admin creating an event or announcement
 // should never be able to pick a date before this year - catches the
@@ -315,7 +326,7 @@ function Events() {
                 onChange={(e) => setLocation(e.target.value)}
               >
                 <option value="">Select a campus</option>
-                {CAMPUSES.map((campus) => (
+                {campusOptions(location).map((campus) => (
                   <option key={campus} value={campus}>
                     {campus}
                   </option>
