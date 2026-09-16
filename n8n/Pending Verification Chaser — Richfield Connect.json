@@ -1,0 +1,353 @@
+{
+  "name": "Pending Verification Chaser — Richfield Connect",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "1cf5d3f0-1151-4d6c-b49c-2cb8283c0734",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1072,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "staleHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "2",
+              "name": "digestIntervalHours",
+              "value": 6,
+              "type": "number"
+            },
+            {
+              "id": "3",
+              "name": "adminEmailsRaw",
+              "value": "={{ $env.ADMIN_DIGEST_EMAILS }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "fromAddress",
+              "value": "={{ $env.DIGEST_FROM_EMAIL }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "02f29303-260f-4219-ab4a-709dec172e83",
+      "name": "⚙️ Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -848,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turns the configured \"stale after N hours\" window into a concrete\n// ISO timestamp we can hand straight to PostgREST as a `lt.` filter.\n\nconst config = $('⚙️ Configuration').first().json;\nconst cutoffTimestamp = new Date(Date.now() - config.staleHours * 60 * 60 * 1000).toISOString();\n\nreturn [{\n  json: {\n    ...config,\n    cutoffTimestamp\n  }\n}];"
+      },
+      "id": "cb5d163a-dfbf-4f1a-b3a4-04e735547a88",
+      "name": "Compute Cutoff Timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -624,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/verification_claims",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "eq.pending"
+            },
+            {
+              "name": "created_at",
+              "value": "=lt.{{ $json.cutoffTimestamp }}"
+            },
+            {
+              "name": "order",
+              "value": "created_at.asc"
+            },
+            {
+              "name": "select",
+              "value": "*,profiles!verification_claims_user_id_fkey(first_name,last_name,email)"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d480d557-0eb4-426c-b67f-36ee33f4bc3f",
+      "name": "Fetch Stale Pending Claims",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalises the HTTP Request node's output into a single item holding\n// a `claims` array + count, regardless of whether n8n auto-split the\n// JSON array response into multiple items or returned it as one item\n// containing the whole array.\n\nconst raw = $input.all();\nlet claims;\n\nif (raw.length === 1 && Array.isArray(raw[0].json)) {\n  claims = raw[0].json;\n} else {\n  claims = raw.map(i => i.json).filter(j => j && Object.keys(j).length > 0);\n}\n\nreturn [{\n  json: {\n    claims,\n    count: claims.length\n  }\n}];"
+      },
+      "id": "b816bf7b-6cb1-4ec3-a7e9-6b4bd9b27b1a",
+      "name": "Aggregate Claims",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "32fd978f-6389-4b22-bd10-18283af311cf",
+      "name": "Any Stale Claims?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        48,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the HTML body for the admin \"pending verification\" chaser digest.\n// Adjust the field names below (alumni_name, alumni_email, track_id, ...)\n// to match your actual `verification_claims` columns if they differ -\n// see the README for how to embed the related alumni record via\n// PostgREST's `select=*,...` resource embedding instead.\n\nconst { claims } = $json;\nconst config = $('⚙️ Configuration').first().json;\n\nfunction hoursPending(createdAt) {\n  const ms = Date.now() - new Date(createdAt).getTime();\n  return Math.floor(ms / (1000 * 60 * 60));\n}\n\nconst rows = claims.map(c => {\n  // verification_claims has no name/email column itself - the select query\n  // embeds them from profiles via the user_id FK (verified against the live\n  // schema 2026-09-16). Fallbacks kept in case a differently-shaped table\n  // is used instead.\n  const profile = c.profiles || {};\n  const name    = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || c.alumni_name || c.full_name || c.name || '(name unavailable)';\n  const email   = profile.email || c.alumni_email || c.email || '(email unavailable)';\n  const trackId = c.track_id || c.tracking_id || c.id;\n  const created = c.created_at || c.submitted_at;\n  const hrs     = created ? hoursPending(created) : '—';\n\n  return `\n    <tr>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${trackId}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${name}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${email}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${created ? new Date(created).toLocaleString() : '—'}</td>\n      <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#b91c1c;\">${hrs}h</td>\n    </tr>`;\n}).join('');\n\nconst html = `\n  <div style=\"font-family:Arial,sans-serif;max-width:640px;margin:0 auto;\">\n    <h2 style=\"color:#1e3a8a;\">Pending Alumni Verification — Action Needed</h2>\n    <p>${claims.length} verification claim(s) have been sitting in <strong>pending</strong>\n       status for more than ${config.staleHours} hours. Please review and action them in\n       the admin console.</p>\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      <thead>\n        <tr style=\"background:#f1f5f9;text-align:left;\">\n          <th style=\"padding:8px;\">Track ID</th>\n          <th style=\"padding:8px;\">Alumni</th>\n          <th style=\"padding:8px;\">Email</th>\n          <th style=\"padding:8px;\">Submitted</th>\n          <th style=\"padding:8px;\">Pending</th>\n        </tr>\n      </thead>\n      <tbody>${rows}</tbody>\n    </table>\n    <p style=\"color:#64748b;font-size:12px;margin-top:16px;\">\n      This is an automated chaser sent every ${config.digestIntervalHours} hours by the\n      Richfield Connect moderation workflow. It will keep sending until each claim's status\n      changes away from \"pending\" - there is no snooze/dedup logic in this template (see\n      README for how to add one if the repetition becomes noisy).\n    </p>\n  </div>`;\n\nconst recipients = (config.adminEmailsRaw || '')\n  .split(',')\n  .map(e => e.trim())\n  .filter(Boolean);\n\nreturn [{\n  json: {\n    html,\n    subject: `⚠️ ${claims.length} alumni verification claim(s) pending 24h+`,\n    recipients,\n    fromAddress: config.fromAddress\n  }\n}];"
+      },
+      "id": "fe90d001-6681-499a-a7fc-1c68b59a8521",
+      "name": "Build Digest Email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RESEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: $json.fromAddress, to: $json.recipients, subject: $json.subject, html: $json.html }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "299a4082-81c2-41a8-9c54-da316d2156d3",
+      "name": "Send Digest Email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        128
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1dba123b-45ff-44a8-ac6e-c007d49f3b26",
+      "name": "Digest Sent ✅",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        704,
+        128
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9f8f9e13-c95f-41a4-836d-3c56e5c2d2d0",
+      "name": "No Stale Claims — Skip",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        368
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Configuration": {
+      "main": [
+        [
+          {
+            "node": "Compute Cutoff Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Cutoff Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Fetch Stale Pending Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Stale Pending Claims": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Claims": {
+      "main": [
+        [
+          {
+            "node": "Any Stale Claims?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Stale Claims?": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Email HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Stale Claims — Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest Email HTML": {
+      "main": [
+        [
+          {
+            "node": "Send Digest Email (Resend)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Digest Email (Resend)": {
+      "main": [
+        [
+          {
+            "node": "Digest Sent ✅",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5e2ad2e2-f6a8-4aa4-8ce0-9a7e826a771d",
+  "meta": {
+    "instanceId": "ad996219b7cf88c5002712ab8990c0270850aceb0baa12aefba8441ab7091053"
+  },
+  "nodeGroups": [],
+  "id": "QavKCqMRFUnAbTeG",
+  "tags": []
+}

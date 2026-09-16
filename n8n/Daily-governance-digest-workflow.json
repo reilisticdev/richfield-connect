@@ -1,0 +1,482 @@
+{
+  "name": "Daily Governance Digest \u2014 Richfield Connect",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "daily_at_07:00",
+      "name": "Daily at 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "windowHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "2",
+              "name": "onlySendIfActivity",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "3",
+              "name": "adminEmailsRaw",
+              "value": "={{ $env.ADMIN_DIGEST_EMAILS }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "fromAddress",
+              "value": "={{ $env.DIGEST_FROM_EMAIL }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cfg_configuration",
+      "name": "\u2699\ufe0f Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turns the configured lookback window into a concrete ISO timestamp\n// we can hand straight to PostgREST as a `gte.` filter on both tables.\n\nconst config = $('\u2699\ufe0f Configuration').first().json;\nconst sinceTimestamp = new Date(Date.now() - config.windowHours * 60 * 60 * 1000).toISOString();\n\nreturn [{\n  json: {\n    ...config,\n    sinceTimestamp\n  }\n}];"
+      },
+      "id": "compute_since_timestamp",
+      "name": "Compute Since Timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/account_actions",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "created_at",
+              "value": "=gte.{{ $json.sinceTimestamp }}"
+            },
+            {
+              "name": "order",
+              "value": "created_at.asc"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "fetch_account_actions",
+      "name": "Fetch Account Actions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/verification_audit",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "decided_at",
+              "value": "=gte.{{ $json.sinceTimestamp }}"
+            },
+            {
+              "name": "order",
+              "value": "created_at.asc"
+            },
+            {
+              "name": "select",
+              "value": "*"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "fetch_verification_audit",
+      "name": "Fetch Verification Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalises this HTTP Request node's output into a single item,\n// regardless of whether n8n auto-split the JSON array response into\n// multiple items or returned it as one item containing the whole array.\n\nconst raw = $input.all();\nlet records;\n\nif (raw.length === 1 && Array.isArray(raw[0].json)) {\n  records = raw[0].json;\n} else {\n  records = raw.map(i => i.json).filter(j => j && Object.keys(j).length > 0);\n}\n\nreturn [{\n  json: {\n    table: 'account_actions',\n    records,\n    count: records.length\n  }\n}];"
+      },
+      "id": "aggregate_account_actions",
+      "name": "Aggregate Account Actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalises this HTTP Request node's output into a single item,\n// regardless of whether n8n auto-split the JSON array response into\n// multiple items or returned it as one item containing the whole array.\n\nconst raw = $input.all();\nlet records;\n\nif (raw.length === 1 && Array.isArray(raw[0].json)) {\n  records = raw[0].json;\n} else {\n  records = raw.map(i => i.json).filter(j => j && Object.keys(j).length > 0);\n}\n\nreturn [{\n  json: {\n    table: 'verification_audit',\n    records,\n    count: records.length\n  }\n}];"
+      },
+      "id": "aggregate_verification_audit",
+      "name": "Aggregate Verification Audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge_both_sources",
+      "name": "Merge Both Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        1100,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merges the two aggregated branches (account_actions + verification_audit)\n// back into one item, and decides whether today's digest should be\n// skipped (only relevant if you've turned onlySendIfActivity on).\n\nconst config = $('\u2699\ufe0f Configuration').first().json;\nconst items = $input.all().map(i => i.json);\n\nconst accountActions    = items.find(i => i.table === 'account_actions')     || { records: [], count: 0 };\nconst verificationAudit = items.find(i => i.table === 'verification_audit') || { records: [], count: 0 };\n\nconst totalCount = accountActions.count + verificationAudit.count;\nconst shouldSkip = Boolean(config.onlySendIfActivity) && totalCount === 0;\n\nreturn [{\n  json: {\n    ...config,\n    accountActions: accountActions.records,\n    verificationAudit: verificationAudit.records,\n    totalCount,\n    shouldSkip\n  }\n}];"
+      },
+      "id": "combine_&_decide",
+      "name": "Combine & Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.shouldSkip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "should_skip_today",
+      "name": "Should Skip Today?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the HTML body for the daily governance digest.\n// Adjust the field names below to match your actual `account_actions`\n// and `verification_audit` columns if they differ - see the README.\n\nconst {\n  accountActions, verificationAudit, totalCount,\n  windowHours, adminEmailsRaw, fromAddress\n} = $json;\n\nfunction fmt(ts) {\n  return ts ? new Date(ts).toLocaleString() : '\u2014';\n}\n\nfunction actionRows(rows) {\n  if (!rows.length) {\n    return `<tr><td colspan=\"5\" style=\"padding:10px;color:#64748b;font-style:italic;\">No account actions in this window.</td></tr>`;\n  }\n  return rows.map(r => {\n    const action     = r.action_type || r.action || '(unknown)';\n    const targetUser = r.target_label || r.target_user_email || r.target_user_name || r.target_user_id || '(unknown)';\n    const performedBy= r.performed_by_name || r.performed_by_email || r.performed_by || r.admin_id || '(unknown)';\n    const reason      = r.reason || r.notes || '\u2014';\n    return `\n      <tr>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${fmt(r.created_at)}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;font-weight:600;\">${action}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${targetUser}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${performedBy}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${reason}</td>\n      </tr>`;\n  }).join('');\n}\n\nfunction auditRows(rows) {\n  if (!rows.length) {\n    return `<tr><td colspan=\"5\" style=\"padding:10px;color:#64748b;font-style:italic;\">No verification decisions in this window.</td></tr>`;\n  }\n  return rows.map(r => {\n    const trackId    = r.track_id || r.tracking_id || r.claim_id || r.id;\n    const decision   = r.decision || r.status || '(unknown)';\n    const reviewedBy = r.reviewed_by_name || r.reviewed_by_email || r.reviewed_by || r.admin_id || '(unknown)';\n    const notes       = r.notes || r.reason || '\u2014';\n    const color = /reject|deny|decline/i.test(decision) ? '#b91c1c' : '#15803d';\n    return `\n      <tr>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${fmt(r.decided_at)}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${trackId}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;font-weight:600;color:${color};\">${decision}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${reviewedBy}</td>\n        <td style=\"padding:8px;border-bottom:1px solid #e2e8f0;\">${notes}</td>\n      </tr>`;\n  }).join('');\n}\n\nconst html = `\n  <div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto;\">\n    <h2 style=\"color:#1e3a8a;\">Daily Governance Digest</h2>\n    <p style=\"color:#334155;\">\n      ${totalCount} total action(s) across the platform in the last ${windowHours} hours:\n      ${accountActions.length} account action(s), ${verificationAudit.length} verification decision(s).\n    </p>\n\n    <h3 style=\"color:#1e3a8a;margin-top:24px;\">Account Actions</h3>\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      <thead>\n        <tr style=\"background:#f1f5f9;text-align:left;\">\n          <th style=\"padding:8px;\">Time</th>\n          <th style=\"padding:8px;\">Action</th>\n          <th style=\"padding:8px;\">Target User</th>\n          <th style=\"padding:8px;\">Performed By</th>\n          <th style=\"padding:8px;\">Reason</th>\n        </tr>\n      </thead>\n      <tbody>${actionRows(accountActions)}</tbody>\n    </table>\n\n    <h3 style=\"color:#1e3a8a;margin-top:24px;\">Verification Decisions</h3>\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      <thead>\n        <tr style=\"background:#f1f5f9;text-align:left;\">\n          <th style=\"padding:8px;\">Time</th>\n          <th style=\"padding:8px;\">Track ID</th>\n          <th style=\"padding:8px;\">Decision</th>\n          <th style=\"padding:8px;\">Reviewed By</th>\n          <th style=\"padding:8px;\">Notes</th>\n        </tr>\n      </thead>\n      <tbody>${auditRows(verificationAudit)}</tbody>\n    </table>\n\n    <p style=\"color:#64748b;font-size:12px;margin-top:20px;\">\n      Automated daily governance digest from the Richfield Connect moderation workflow.\n      Full history remains available on the admin console's audit log page.\n    </p>\n  </div>`;\n\nconst recipients = (adminEmailsRaw || '')\n  .split(',')\n  .map(e => e.trim())\n  .filter(Boolean);\n\nconst todayLabel = new Date().toLocaleDateString();\n\nreturn [{\n  json: {\n    html,\n    subject: `Governance Digest \u2014 ${todayLabel} (${totalCount} action${totalCount === 1 ? '' : 's'})`,\n    recipients,\n    fromAddress\n  }\n}];"
+      },
+      "id": "build_digest_email_html",
+      "name": "Build Digest Email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RESEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: $json.fromAddress, to: $json.recipients, subject: $json.subject, html: $json.html }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "send_digest_email_resend",
+      "name": "Send Digest Email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        440
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "digest_sent_\u2705",
+      "name": "Digest Sent \u2705",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        440
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "skipped_no_activity_\u23ed\ufe0f",
+      "name": "Skipped (No Activity) \u23ed\ufe0f",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 07:00": {
+      "main": [
+        [
+          {
+            "node": "\u2699\ufe0f Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2699\ufe0f Configuration": {
+      "main": [
+        [
+          {
+            "node": "Compute Since Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Since Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Fetch Account Actions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Verification Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Account Actions": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Account Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Verification Audit": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Verification Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Account Actions": {
+      "main": [
+        [
+          {
+            "node": "Merge Both Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Verification Audit": {
+      "main": [
+        [
+          {
+            "node": "Merge Both Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Both Sources": {
+      "main": [
+        [
+          {
+            "node": "Combine & Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine & Decide": {
+      "main": [
+        [
+          {
+            "node": "Should Skip Today?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Skip Today?": {
+      "main": [
+        [
+          {
+            "node": "Skipped (No Activity) \u23ed\ufe0f",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Digest Email HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest Email HTML": {
+      "main": [
+        [
+          {
+            "node": "Send Digest Email (Resend)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Digest Email (Resend)": {
+      "main": [
+        [
+          {
+            "node": "Digest Sent \u2705",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
