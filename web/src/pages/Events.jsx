@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 function formatLabel(value) {
@@ -9,6 +9,7 @@ function Events() {
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [error, setError] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
@@ -23,13 +24,20 @@ function Events() {
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
-  const fetchEvents = async () => {
+  const fetchEvents = useCallback(async () => {
     setLoadingEvents(true);
 
-    const { data, error } = await supabase
+    // "Show archived" reveals everything (active + archived) rather than
+    // switching to an archived-only view, so an admin can see and restore
+    // an archived event in the same list it would normally sit in.
+    let query = supabase
       .from("events")
       .select("*")
       .order("event_date", { ascending: true });
+    if (!showArchived) {
+      query = query.is("archived_at", null);
+    }
+    const { data, error } = await query;
 
     if (error) {
       console.error("Error fetching events:", error);
@@ -40,11 +48,11 @@ function Events() {
     }
 
     setLoadingEvents(false);
-  };
+  }, [showArchived]);
 
   useEffect(() => {
     fetchEvents();
-  }, []);
+  }, [fetchEvents]);
 
   const startEditing = (event) => {
     const when = new Date(event.event_date);
@@ -181,6 +189,30 @@ function Events() {
     setEvents((current) => current.filter((item) => item.id !== event.id));
   };
 
+  const restoreEvent = async (id) => {
+    setError(null);
+
+    const { error } = await supabase
+      .from("events")
+      .update({ archived_at: null })
+      .eq("id", id);
+
+    if (error) {
+      console.error("Error restoring event:", error);
+      setError("Could not restore event.");
+      return;
+    }
+
+    // Restore is only ever rendered on an archived row, which is only ever
+    // visible while showArchived is on - so this always just flips the row
+    // back to active in place rather than needing to hide it.
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === id ? { ...event, archived_at: null } : event
+      )
+    );
+  };
+
   return (
     <div className="admin-page">
       <div className="page-header">
@@ -289,9 +321,20 @@ function Events() {
             </p>
           </div>
 
-          <span className="count-badge">
-            {events.length} Events
-          </span>
+          <div className="section-header-actions">
+            <label className="show-archived-toggle">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+              />
+              Show archived
+            </label>
+
+            <span className="count-badge">
+              {events.length} Events
+            </span>
+          </div>
         </div>
 
         <div className="moderation-table">
@@ -350,20 +393,35 @@ function Events() {
                        {formatLabel(event.status)}
                    </span>
 
-                    <button
-                       className="approve-button"
-                       onClick={() => startEditing(event)}
-                    >
-                      Edit
-                    </button>
+                    {event.archived_at && (
+                      <span className="status-badge archived">Archived</span>
+                    )}
 
-                    {event.status === "draft" && (
-                       <button
+                    {event.archived_at ? (
+                      <button
                         className="approve-button"
-                         onClick={() => publishEvent(event.id)}
-                       >
-                         Publish
-                       </button>
+                        onClick={() => restoreEvent(event.id)}
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                           className="approve-button"
+                           onClick={() => startEditing(event)}
+                        >
+                          Edit
+                        </button>
+
+                        {event.status === "draft" && (
+                           <button
+                            className="approve-button"
+                             onClick={() => publishEvent(event.id)}
+                           >
+                             Publish
+                           </button>
+                        )}
+                      </>
                     )}
 
                     {confirmingDeleteId === event.id ? (
