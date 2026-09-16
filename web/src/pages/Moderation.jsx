@@ -71,7 +71,7 @@ function Moderation() {
       .select(
         // `profiles:` aliases the admin_profiles embed so the JSX below keeps
         // reading claim.profiles.* unchanged.
-        "id, student_number, programme, campus, graduation_year, status, profiles:admin_profiles(first_name, last_name, email)"
+        "id, student_number, programme, campus, graduation_year, status, document_path, profiles:admin_profiles(first_name, last_name, email)"
       )
       .eq("status", "pending");
 
@@ -83,6 +83,23 @@ function Moderation() {
     }
 
     setLoadingAlumni(false);
+  };
+
+  // The bucket is private (migration 007), so every open mints a short-lived
+  // signed URL rather than a durable one ever being handed out or stored -
+  // same pattern as viewBusinessDocument below.
+  const viewAlumniDocument = async (documentPath) => {
+    if (!documentPath) return;
+    const { data, error } = await supabase.storage
+      .from("alumni-verification-docs")
+      .createSignedUrl(documentPath, 300);
+
+    if (error || !data?.signedUrl) {
+      console.error("Error creating signed URL for alumni document:", error);
+      setError("Could not open that document.");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
   const fetchFlaggedContent = async () => {
@@ -430,6 +447,17 @@ function Moderation() {
                 </div>
 
                 <div className="action-buttons">
+                  {claim.document_path ? (
+                    <button
+                      className="approve-button"
+                      onClick={() => viewAlumniDocument(claim.document_path)}
+                    >
+                      View document
+                    </button>
+                  ) : (
+                    <small>No document uploaded</small>
+                  )}
+
                   <button
                     className="approve-button"
                     onClick={() => updateAlumniStatus(claim.id, "Approved")}
