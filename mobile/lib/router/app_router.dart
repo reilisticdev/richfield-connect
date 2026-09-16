@@ -5,13 +5,17 @@
 // account_status, so redirects match what the database will actually allow.
 
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/auth_error_mapper.dart';
 import '../services/auth_service.dart';
 import '../services/email_confirmation.dart';
+import '../services/media_service.dart';
 import '../screens/reset_password_screen.dart';
 // main.dart imports this file for buildAppRouter(), and this file imports
 // main.dart back for the real screen widgets (LoginScreen, RegisterScreen,
@@ -308,6 +312,10 @@ class AccountStatusScreen extends StatelessWidget {
                     textAlign: TextAlign.center,
                     style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
                   ),
+                  if (waiting && role == 'business') ...[
+                    SizedBox(height: AppSpace.lg),
+                    _BusinessDocumentUpload(authService: authService),
+                  ],
                   SizedBox(height: AppSpace.xl),
                   // signOut() fires onAuthStateChange, and the redirect above
                   // sends a signed-out user to /login.
@@ -322,6 +330,103 @@ class AccountStatusScreen extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+/// Registration number already travelled in at signup (migration 045); the
+/// supporting document couldn't - there's no session yet at signUp() time,
+/// with email confirmation on. This is that upload step, offered the one
+/// place a pending business account is guaranteed to land.
+class _BusinessDocumentUpload extends StatefulWidget {
+  const _BusinessDocumentUpload({required this.authService});
+
+  final AuthService authService;
+
+  @override
+  State<_BusinessDocumentUpload> createState() => _BusinessDocumentUploadState();
+}
+
+class _BusinessDocumentUploadState extends State<_BusinessDocumentUpload> {
+  static const _docTypes = XTypeGroup(
+    label: 'Document',
+    extensions: ['pdf', 'jpg', 'jpeg', 'png'],
+    mimeTypes: ['application/pdf', 'image/jpeg', 'image/png'],
+    uniformTypeIdentifiers: ['com.adobe.pdf', 'public.jpeg', 'public.png'],
+  );
+
+  final _media = MediaService(Supabase.instance.client);
+  bool _busy = false;
+  bool _uploaded = false;
+  String? _error;
+
+  Future<void> _pickAndUpload() async {
+    final userId = widget.authService.currentUser?.id;
+    if (userId == null) return;
+
+    final XFile? file;
+    try {
+      file = await openFile(acceptedTypeGroups: const [_docTypes]);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Couldn\'t open a file picker on this device.');
+      return;
+    }
+    if (file == null || !mounted) return;
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final Uint8List bytes = await file.readAsBytes();
+      final extension = '.${file.name.split('.').last.toLowerCase()}';
+      final contentType = switch (extension) {
+        '.pdf' => 'application/pdf',
+        '.png' => 'image/png',
+        _ => 'image/jpeg',
+      };
+      final path = await _media.uploadVerificationDocument(
+        bucket: MediaService.businessVerificationDocsBucket,
+        userId: userId,
+        bytes: bytes,
+        extension: extension,
+        contentType: contentType,
+      );
+      await Supabase.instance.client
+          .from('business_profiles')
+          .update({'document_path': path})
+          .eq('profile_id', userId);
+      if (mounted) setState(() => _uploaded = true);
+    } catch (e) {
+      if (mounted) setState(() => _error = AuthErrorMapper.fromAny(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text(
+          'Upload your company registration document (PDF or photo) so an '
+          'administrator can verify it alongside your registration number.',
+          textAlign: TextAlign.center,
+          style: AppText.bodySm(color: AppColors.onSurfaceVariant),
+        ),
+        SizedBox(height: AppSpace.sm),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _pickAndUpload,
+          icon: _busy
+              ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(_uploaded ? Icons.check_circle_outline : Icons.upload_file_outlined),
+          label: Text(_uploaded ? 'Document uploaded — tap to replace' : 'Upload registration document'),
+        ),
+        if (_error != null) ...[
+          SizedBox(height: AppSpace.xs),
+          Text(_error!, textAlign: TextAlign.center, style: AppText.bodySm(color: AppColors.error)),
+        ],
+      ],
     );
   }
 }

@@ -401,6 +401,35 @@ class MediaService {
     await _client.storage.from(cvsBucket).remove([path]);
   }
 
+  // --- Business registration document (migration 045) --------------------
+
+  static const String businessVerificationDocsBucket = 'business-verification-docs';
+  static const int maxVerificationDocBytes = 5 * 1024 * 1024;
+
+  /// One stable key per member, same replace-on-reupload shape as
+  /// [uploadCv]. [extension] includes the dot (".pdf", ".jpg", ...).
+  Future<String> uploadVerificationDocument({
+    required String bucket,
+    required String userId,
+    required Uint8List bytes,
+    required String extension,
+    required String contentType,
+  }) async {
+    if (bytes.length > maxVerificationDocBytes) {
+      throw MediaException(
+        'That file is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} MB. '
+        'Choose one under ${maxVerificationDocBytes ~/ (1024 * 1024)} MB.',
+      );
+    }
+    final path = '$userId/verification$extension';
+    await _client.storage.from(bucket).uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(upsert: true, contentType: contentType),
+        );
+    return path;
+  }
+
   /// Copies the member's current CV to a per-application key so the
   /// business sees exactly what was submitted, even after the member
   /// replaces or removes the CV on their profile (migration 039). Still
