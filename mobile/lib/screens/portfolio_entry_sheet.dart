@@ -40,7 +40,7 @@ const _titles = {
 const _fields = <PortfolioSection, List<_Field>>{
   PortfolioSection.education: [
     _Field('programme', 'Programme', required: true, hint: 'e.g. BSc Information Technology'),
-    _Field('campus', 'Campus', required: true, hint: 'e.g. Braamfontein'),
+    _Field('campus', 'Campus', required: true, hint: 'e.g. Bryanston'),
     _Field('enrolment_year', 'Year started', kind: _Kind.year, required: true),
     _Field('graduation_year', 'Year of graduation', kind: _Kind.year, hint: 'Expected year is fine'),
   ],
