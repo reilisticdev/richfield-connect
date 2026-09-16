@@ -2,13 +2,26 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useEffect, useState } from "react";
 
+const THEME_KEY = "richfield_admin_dark_mode";
+
 function Sidebar() {
   const navigate = useNavigate();
 
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem(THEME_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
-  document.documentElement.classList.toggle("dark", darkMode);
+    document.documentElement.classList.toggle("dark", darkMode);
+    try {
+      localStorage.setItem(THEME_KEY, String(darkMode));
+    } catch {
+      // Private window or blocked storage: theme just won't persist.
+    }
   }, [darkMode]);
 
   const handleSignOut = async () => {
@@ -68,12 +81,12 @@ function Sidebar() {
           type="button"
           className="theme-toggle"
           onClick={() => setDarkMode((current) => !current)}
-       >
-        {darkMode ? "☀ Light Mode" : "☾ Dark Mode"}
+        >
+          {darkMode ? "☀ Light Mode" : "☾ Dark Mode"}
         </button>
 
         <button type="button" onClick={handleSignOut}>
-           Sign Out
+          Sign Out
         </button>
       </div>
     </aside>

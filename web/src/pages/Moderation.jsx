@@ -206,14 +206,17 @@ function Moderation() {
   };
 
   // Closes every pending report about the same item, not just the row clicked.
+  // RLS turns a disallowed update into zero rows rather than an error, so
+  // ask for the updated rows back and treat an empty result as a failure.
   const closeReports = async (report, status) => {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("content_reports")
       .update({ status })
       .eq("content_id", report.content_id)
-      .eq("status", "pending");
+      .eq("status", "pending")
+      .select("id");
 
-    if (error) {
+    if (error || !data?.length) {
       console.error("Error updating reports:", error);
       return false;
     }
