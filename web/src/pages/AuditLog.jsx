@@ -46,18 +46,21 @@ function AuditLog() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
+  const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const load = async () => {
       // Each table has two foreign keys into profiles, so the embeds name
-      // the column they follow (PostgREST's `!column` hint).
+      // the column they follow (PostgREST's `!column` hint). account_status
+      // lets a still-suspended row offer Unsuspend right here, without
+      // sending the admin back to Users to find the same account again.
       const [actionsResult, decisionsResult] = await Promise.all([
         supabase
           .from("account_actions")
           .select(
-            "id, action, target_label, reason, created_at, profile_id, admin:profiles!admin_id(first_name, last_name), target:profiles!profile_id(first_name, last_name)"
+            "id, action, target_label, reason, created_at, profile_id, admin:profiles!admin_id(first_name, last_name), target:profiles!profile_id(first_name, last_name, account_status)"
           )
           .order("created_at", { ascending: false })
           .limit(200),
@@ -88,6 +91,39 @@ function AuditLog() {
       cancelled = true;
     };
   }, []);
+
+  // Same RPC and confirm-dialog pattern as Users.jsx's Reactivate button -
+  // this is just a second entry point onto the same account, from wherever
+  // an admin happens to be looking at the suspension itself.
+  const unsuspendMember = async (entry) => {
+    const name = personName(entry.target) || entry.target_label;
+    if (!window.confirm(`Reactivate ${name}? They will be able to sign in again.`)) {
+      return;
+    }
+
+    setError(null);
+    setBusyId(entry.id);
+    const { error } = await supabase.rpc("admin_set_account_status", {
+      target_id: entry.profile_id,
+      suspend: false,
+      reason: null,
+    });
+    setBusyId(null);
+
+    if (error) {
+      console.error("Error reactivating account:", error);
+      setError(error.message || "Could not reactivate the account.");
+      return;
+    }
+
+    setActions((current) =>
+      current.map((item) =>
+        item.profile_id === entry.profile_id && item.target
+          ? { ...item, target: { ...item.target, account_status: "active" } }
+          : item
+      )
+    );
+  };
 
   const query = search.trim().toLowerCase();
 
@@ -154,6 +190,7 @@ function AuditLog() {
             <span>Action</span>
             <span>Administrator</span>
             <span>When</span>
+            <span>Actions</span>
           </div>
 
           {loading ? (
@@ -195,6 +232,20 @@ function AuditLog() {
                 <div>{personName(entry.admin) || "Administrator since removed"}</div>
 
                 <div>{when(entry.created_at)}</div>
+
+                <div className="action-buttons">
+                  {entry.action === "suspended" && entry.target?.account_status === "suspended" ? (
+                    <button
+                      className="approve-button"
+                      disabled={busyId === entry.id}
+                      onClick={() => unsuspendMember(entry)}
+                    >
+                      {busyId === entry.id ? "Unsuspending..." : "Unsuspend"}
+                    </button>
+                  ) : (
+                    <small>—</small>
+                  )}
+                </div>
               </div>
             ))
           )}

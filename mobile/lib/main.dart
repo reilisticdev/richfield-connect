@@ -1526,6 +1526,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _programmeController = TextEditingController();
   final _studentNumberController = TextEditingController();
+  final _trackIdController = TextEditingController();
   final _enrolmentYearController = TextEditingController();
   final _graduationYearController = TextEditingController();
   final _companyNameController = TextEditingController();
@@ -1597,6 +1598,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _passwordController,
         _programmeController,
         _studentNumberController,
+        _trackIdController,
         _enrolmentYearController,
         _graduationYearController,
         _companyNameController,
@@ -1708,6 +1710,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _yearOrderProblem();
       case 1:
         if (_text(_studentNumberController).isEmpty) return 'Enter the student number you studied under.';
+        if (_text(_trackIdController).isEmpty) {
+          return 'Enter the track ID printed on your degree/certificate.';
+        }
         if (_text(_programmeController).isEmpty) return 'Enter the programme you completed.';
         return _yearProblem('Year started', _enrolmentYearController, required: false) ??
             _yearProblem('Graduation year', _graduationYearController, required: true) ??
@@ -1739,7 +1744,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       details['campus'] = _campus;
       put('enrolment_year', _enrolmentYearController);
       put('graduation_year', _graduationYearController);
-      if (_tab == 1) put('student_number', _studentNumberController);
+      if (_tab == 1) {
+        put('student_number', _studentNumberController);
+        put('track_id', _trackIdController);
+      }
     }
     return details;
   }
@@ -2086,6 +2094,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (alumni) ...[
         _labeledField('Student number', 'The number you studied under', Icons.badge_outlined,
             controller: _studentNumberController),
+        gap(),
+        _labeledField('Track ID', 'Printed on your degree/certificate', Icons.verified_outlined,
+            controller: _trackIdController),
         gap(),
       ],
       _labeledField(alumni ? 'Programme completed' : 'Programme', 'BSc Information Technology', Icons.school_outlined,
