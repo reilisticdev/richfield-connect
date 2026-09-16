@@ -20,6 +20,56 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "wh-secret-1",
+              "leftValue": "={{ $json.headers['x-webhook-secret'] }}",
+              "rightValue": "={{ $env.N8N_WEBHOOK_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1c9a2e4-7f3d-4e21-9a6c-2d8f5e0b7c11",
+      "name": "Verify Webhook Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"Unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "d4e8f712-3a5b-4c96-8e1f-6b2a9d4c7f03",
+      "name": "Respond 401 (Unauthorized)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1104,
+        400
+      ]
+    },
+    {
+      "parameters": {
         "assignments": {
           "assignments": [
             {
@@ -387,7 +437,25 @@
       "main": [
         [
           {
+            "node": "Verify Webhook Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Webhook Secret": {
+      "main": [
+        [
+          {
             "node": "⚙️ Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401 (Unauthorized)",
             "type": "main",
             "index": 0
           }
