@@ -18,7 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../main.dart' show AppColors, AppRadius, AppSpace, AppText;
+import '../main.dart' show AppColors, AppRadius, AppSpace, AppText, PostDetailScreen;
 import '../services/ai_service.dart';
 import '../services/auth_error_mapper.dart';
 import '../services/connections_service.dart';
@@ -28,6 +28,42 @@ import '../services/realtime_hub.dart';
 import '../widgets/profile_avatar.dart';
 import '../widgets/time_labels.dart';
 import 'member_profile_screen.dart';
+
+/// A message body that shared a post (see main.dart's postShareText), parsed
+/// back out so ChatScreen._bubble can render it as a card instead of plain
+/// text. [postId] is only present when the share carried the
+/// `richfield://post/<id>` marker postShareText appends — a message shared
+/// before that marker existed still matches the text pattern but has no id
+/// to open.
+class _SharedPost {
+  const _SharedPost({required this.authorName, required this.preview, this.postId});
+
+  final String authorName;
+  final String preview;
+  final String? postId;
+}
+
+const _uuidPattern = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+final _sharedPostLinkPattern = RegExp('\\nrichfield://post/($_uuidPattern)\$');
+final _sharedPostWithBodyPattern = RegExp(r'^(.+?) on Richfield Connect:\n\n([\s\S]*)$');
+final _sharedPostEmptyBodyPattern = RegExp(r'^(.+?) shared this on Richfield Connect\.$');
+
+_SharedPost? _parseSharedPost(String text) {
+  var body = text;
+  final linkMatch = _sharedPostLinkPattern.firstMatch(body);
+  final postId = linkMatch?.group(1);
+  if (linkMatch != null) body = body.substring(0, linkMatch.start);
+
+  final withBody = _sharedPostWithBodyPattern.firstMatch(body);
+  if (withBody != null) {
+    return _SharedPost(authorName: withBody.group(1)!, preview: withBody.group(2)!, postId: postId);
+  }
+  final emptyBody = _sharedPostEmptyBodyPattern.firstMatch(body);
+  if (emptyBody != null) {
+    return _SharedPost(authorName: emptyBody.group(1)!, preview: '', postId: postId);
+  }
+  return null;
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.partnerId, this.partner});
@@ -475,11 +511,22 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _openSharedPost(String? postId) {
+    if (postId == null) {
+      _snack("This shared post can't be opened anymore.");
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId)),
+    );
+  }
+
   Widget _bubble(ChatMessage m) {
     final mine = m.senderId == _me;
     final foreground = mine ? AppColors.onPrimary : AppColors.onSurface;
     const round = Radius.circular(AppRadius.xl);
     const tail = Radius.circular(AppRadius.sm);
+    final shared = _parseSharedPost(m.body);
 
     IconData? statusIcon;
     if (mine) {
@@ -495,7 +542,11 @@ class _ChatScreenState extends State<ChatScreen> {
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onTap: m.failed ? () => _send(retry: m) : null,
+        onTap: m.failed
+            ? () => _send(retry: m)
+            : shared != null
+                ? () => _openSharedPost(shared.postId)
+                : null,
         onLongPress: () => _messageActions(m),
         child: Container(
           constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
@@ -515,7 +566,7 @@ class _ChatScreenState extends State<ChatScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(m.body, style: AppText.bodyMd(color: foreground)),
+              if (shared != null) _sharedPostCard(shared, foreground) else Text(m.body, style: AppText.bodyMd(color: foreground)),
               const SizedBox(height: 2),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -539,6 +590,46 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _sharedPostCard(_SharedPost shared, Color foreground) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 160),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: foreground.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.article_outlined, size: 15, color: foreground),
+              const SizedBox(width: 6),
+              Text('Shared post', style: AppText.labelBadge(color: foreground)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(shared.authorName, style: AppText.bodyMd(color: foreground).copyWith(fontWeight: FontWeight.w700)),
+          if (shared.preview.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              shared.preview,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.bodySm(color: foreground.withOpacity(0.85)),
+            ),
+          ],
+          const SizedBox(height: 4),
+          Text(
+            shared.postId == null ? 'No longer available' : 'View post ›',
+            style: AppText.labelBadge(color: foreground.withOpacity(0.85)),
+          ),
+        ],
       ),
     );
   }
