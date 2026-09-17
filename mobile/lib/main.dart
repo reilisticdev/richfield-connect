@@ -4326,7 +4326,13 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
 }
 
 class StudentAnalyticsScreen extends StatefulWidget {
-  StudentAnalyticsScreen({super.key});
+  StudentAnalyticsScreen({super.key, this.role = 'student'});
+
+  /// 'student' or 'alumni' — the data and layout are identical (both are
+  /// the same nine-item employability score over the same profile fields),
+  /// only the AppBar title changes. An alumnus opening this from Portfolio
+  /// was seeing "Student Analytics" regardless of their own role.
+  final String role;
 
   @override
   State<StudentAnalyticsScreen> createState() => _StudentAnalyticsScreenState();
@@ -4358,8 +4364,9 @@ class _StudentAnalyticsScreenState extends State<StudentAnalyticsScreen> {
   @override
   Widget build(BuildContext context) {
     final data = _data;
+    final title = widget.role == 'alumni' ? 'Alumni Analytics' : 'Student Analytics';
     return Scaffold(
-      appBar: AppBar(title: Text('Student Analytics')),
+      appBar: AppBar(title: Text(title)),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -5812,9 +5819,9 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                 subtitle: 'RICHFIELD VERIFIED',
                 extraAction: _hasCareerProfile
                     ? IconButton(
-                        tooltip: 'Open student analytics',
+                        tooltip: _role == 'alumni' ? 'Open alumni analytics' : 'Open student analytics',
                         onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => StudentAnalyticsScreen()),
+                          MaterialPageRoute(builder: (_) => StudentAnalyticsScreen(role: _role)),
                         ),
                         icon: Icon(Icons.analytics_outlined),
                       )
