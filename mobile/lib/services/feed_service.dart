@@ -32,6 +32,13 @@ class FeedService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
+  /// One post by id, for opening a post that was shared into a chat message.
+  /// Null means the post is gone (deleted, or RLS no longer allows it) —
+  /// the caller shows "no longer available" rather than an error.
+  Future<Map<String, dynamic>?> fetchPostById(String id) async {
+    return await _client.from('posts').select(postFields).eq('id', id).maybeSingle();
+  }
+
   /// One member's own posts, newest first — the Portfolio tab's activity.
   Future<List<Map<String, dynamic>>> fetchPostsByAuthor(String authorId, {int limit = 20}) async {
     final rows = await _client

@@ -667,6 +667,80 @@ String _timeAgo(DateTime dt) {
   return '${diff.inDays}d ago';
 }
 
+/// Opened when a chat message that shared a post is tapped (see
+/// postShareText / ChatScreen._bubble). Read-only — the like/comment/repost
+/// buttons that _TextPostCard and _VideoPostCard normally take are left
+/// null, same as any other place in the app that renders a post it isn't
+/// prepared to let the viewer act on from that screen.
+class PostDetailScreen extends StatefulWidget {
+  const PostDetailScreen({super.key, required this.postId});
+
+  final String postId;
+
+  @override
+  State<PostDetailScreen> createState() => _PostDetailScreenState();
+}
+
+class _PostDetailScreenState extends State<PostDetailScreen> {
+  final _feedService = FeedService(Supabase.instance.client);
+  final _mediaService = MediaService(Supabase.instance.client);
+
+  bool _loading = true;
+  FeedPost? _post;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final row = await _feedService.fetchPostById(widget.postId);
+      if (!mounted) return;
+      setState(() {
+        _post = row == null ? null : _feedPostFromRow(row, mediaService: _mediaService);
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _post = null;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(backgroundColor: AppColors.surface, title: Text('Post')),
+      body: SafeArea(
+        child: _loading
+            ? Center(child: CircularProgressIndicator())
+            : _post == null
+                ? Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(AppSpace.xl),
+                      child: Text(
+                        'This post is no longer available.',
+                        textAlign: TextAlign.center,
+                        style: AppText.bodyMd(color: AppColors.onSurfaceVariant),
+                      ),
+                    ),
+                  )
+                : SingleChildScrollView(
+                    padding: EdgeInsets.all(AppSpace.base),
+                    child: _post!.type == FeedPostType.text
+                        ? _TextPostCard(post: _post!)
+                        : _VideoPostCard(post: _post!),
+                  ),
+      ),
+    );
+  }
+}
+
 // =====================================================================
 // SECTION 4 — SHARED SMALL WIDGETS
 // =====================================================================
@@ -953,7 +1027,7 @@ class RichfieldHeader extends StatelessWidget {
             ),
             child: RichfieldLogo(size: 26),
           ),
-          SizedBox(width: AppSpace.sm),
+          SizedBox(width: AppSpace.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1888,7 +1962,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         if (!_studentEmailPattern.hasMatch(_text(_emailController).trim())) {
           return 'Enter a valid Richfield or AAA student email address.';
         }
-        if (_text(_programmeController).isEmpty) return 'Enter your programme.';
+        if (_text(_programmeController).trim().length < 3) return 'Enter your programme.';
         return _yearProblem('Year started', _enrolmentYearController, required: true) ??
             _yearProblem('Graduation year', _graduationYearController, required: false) ??
             _yearOrderProblem();
@@ -1897,7 +1971,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         if (_text(_trackIdController).isEmpty) {
           return 'Enter the track ID printed on your degree/certificate.';
         }
-        if (_text(_programmeController).isEmpty) return 'Enter the programme you completed.';
+        if (_text(_programmeController).trim().length < 3) return 'Enter the programme you completed.';
         return _yearProblem('Year started', _enrolmentYearController, required: false) ??
             _yearProblem('Graduation year', _graduationYearController, required: true) ??
             _yearOrderProblem();
@@ -3056,8 +3130,17 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _maybeShowTour() async {
+    // Keyed per-user, not just per-device: the global key this used to be
+    // meant that once ANY account had seen the tour on a device, every
+    // subsequent new registration on that same phone/emulator — exactly how
+    // this team re-tests, and how a fresh demo account gets created on
+    // existing hardware — silently never saw onboarding at all.
+    final userId = widget.authService.currentUser?.id;
+    if (userId == null || !mounted) return;
+    final key = '$_tourSeenKey:$userId';
+
     final prefs = await SharedPreferences.getInstance();
-    final alreadySeen = prefs.getBool(_tourSeenKey) ?? false;
+    final alreadySeen = prefs.getBool(key) ?? false;
     if (alreadySeen || !mounted) return;
 
     // Set the flag before showing, not after dismissal — the manual
@@ -3065,7 +3148,7 @@ class _RootShellState extends State<RootShell> {
     // fallback, so the cost of marking it seen a touch early is low, and
     // it means repeatedly relaunching the app mid-testing (Keshav's
     // actual workflow tonight) doesn't re-trigger it on every restart.
-    await prefs.setBool(_tourSeenKey, true);
+    await prefs.setBool(key, true);
     if (!mounted) return;
     await _startOnboardingTour(context);
 
@@ -4612,11 +4695,17 @@ Widget _engagementRow(
 /// other installed app) with the post's author and text. Every Share button
 /// in the feed used to pass a hardcoded null handler and render as visibly
 /// disabled — see _reactionRow's tint logic.
+/// The trailing `richfield://post/<id>` line is not shown as raw text
+/// anywhere it matters: ChatScreen._bubble strips it before display and uses
+/// it to route "shared post" bubbles to PostDetailScreen instead of just
+/// linking to plain author-name-plus-body text with nothing to open.
 String postShareText(FeedPost post) {
   final body = post.body.trim();
-  return body.isEmpty
+  final base = body.isEmpty
       ? '${post.authorName} shared this on Richfield Connect.'
       : '${post.authorName} on Richfield Connect:\n\n$body';
+  final id = post.id;
+  return id == null ? base : '$base\nrichfield://post/$id';
 }
 
 Future<void> _sharePost(BuildContext context, FeedPost post) async {
