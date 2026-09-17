@@ -11,5 +11,12 @@ body,
 }
 
 body {
-  font-family: Arial, Helvetica, sans-serif;
+  /* The system stack: San Francisco on Apple devices, Segoe UI on
+     Windows. Arial was the previous value and is what made the
+     console read as a generic web form rather than a native app. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #f5f5f7;
 }

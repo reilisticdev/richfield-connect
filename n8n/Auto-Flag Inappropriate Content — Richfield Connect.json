@@ -87,7 +87,7 @@
             {
               "id": "3",
               "name": "aiModel",
-              "value": "gemini-2.0-flash",
+              "value": "gemini-2.5-flash",
               "type": "string"
             }
           ]
